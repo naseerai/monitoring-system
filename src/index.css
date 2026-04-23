@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-neon-lime: #D4FF00;
+  --color-neon-dark: #0A0A0A;
+  --color-card-bg: #141414;
+  --color-border: #1F1F1F;
+  --font-display: "Space Grotesk", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-neon-dark text-white font-sans antialiased;
+    background-image: 
+      radial-gradient(circle at 50% 0%, rgba(212, 255, 0, 0.05) 0%, transparent 50%),
+      linear-gradient(rgba(20, 20, 20, 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(20, 20, 20, 0.5) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+  }
+}
+
+.neon-glow {
+  box-shadow: 0 0 15px rgba(212, 255, 0, 0.3);
+}
+
+.neon-border {
+  border: 1px solid rgba(212, 255, 0, 0.2);
+}
+
+.text-gradient {
+  background: linear-gradient(to bottom, #FFF 0%, rgba(255,255,255,0.5) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0A0A0A;
+}
+::-webkit-scrollbar-thumb {
+  background: #1F1F1F;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2F2F2F;
+}
+
