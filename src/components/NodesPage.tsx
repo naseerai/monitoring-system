@@ -7,11 +7,13 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Loader2,
+  Lock,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import EditNodeModal, { EditNodeFormData } from './EditNodeModal';
 import TerminalModal from './TerminalModal';
 import { wsUrl } from '../utils/wsUrl';
+import { useAuth } from '../context/AuthContext';
 
 interface NodeRecord {
   id: string;
@@ -37,11 +39,12 @@ interface NodeMetrics {
 interface Props {
   onViewDetails: (id: string) => void;
   onOpenTerminalPage?: (nodeId: string, nodeName: string) => void;
+  role?: 'admin' | 'employee' | 'intern';
 }
 
 type Filter = 'ALL' | 'ONLINE' | 'OFFLINE' | 'WARNING';
-
 // ── Sub-components ──────────────────────────────────────────────────────────
+
 
 function StatusBadge({ status }: { status: NodeRecord['status'] }) {
   if (status === 'online')
@@ -98,6 +101,7 @@ interface NodeCardProps {
   onViewDetails: (id: string) => void;
   onEditClick: (node: NodeRecord) => void;
   onOpenTerminal: (nodeId: string, nodeName: string) => void;
+  isIntern?: boolean;
 }
 
 const NodeCard: React.FC<NodeCardProps> = ({
@@ -106,6 +110,7 @@ const NodeCard: React.FC<NodeCardProps> = ({
   onViewDetails,
   onEditClick,
   onOpenTerminal,
+  isIntern,
 }) => {
   const isOffline = node.status === 'offline';
   const cpu = metrics?.cpu ?? 0;
@@ -131,17 +136,19 @@ const NodeCard: React.FC<NodeCardProps> = ({
 
         <div className="flex items-center gap-2">
           <StatusBadge status={node.status} />
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditClick(node);
-            }}
-            title="Node Settings"
-            className="rounded p-1 text-gray-600 transition-colors hover:bg-neon-lime/5 hover:text-neon-lime"
-          >
-            <SlidersHorizontal size={13} />
-          </button>
+          {isIntern ? (
+            <span className="flex items-center gap-1 text-[9px] text-gray-600 border border-[#2a2a2a] rounded px-1.5 py-0.5">
+              <Lock size={9} /> Read-Only
+            </span>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); onEditClick(node); }}
+              title="Node Settings"
+              className="rounded p-1 text-gray-600 transition-colors hover:bg-neon-lime/5 hover:text-neon-lime"
+            >
+              <SlidersHorizontal size={13} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -247,7 +254,9 @@ function LoadingState() {
 
 // ── Main page ────────────────────────────────────────────────────────────────
 
-export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) {
+export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: Props) {
+  const { session } = useAuth();
+  const isIntern = role === 'intern';
   // null = loading, [] = loaded but empty
   const [nodes, setNodes] = useState<NodeRecord[] | null>(null);
   const [metrics, setMetrics] = useState<Map<string, NodeMetrics>>(new Map());
@@ -266,7 +275,15 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
 
   const fetchNodes = useCallback(async () => {
     try {
-      const res = await fetch('/api/nodes');
+      const res = await fetch('/api/nodes', {
+  cache: 'no-store',
+  headers: {
+    'Cache-Control': 'no-cache',
+    ...(session?.access_token
+      ? { Authorization: `Bearer ${session.access_token}` }
+      : {}),
+  },
+});
       if (res.ok) {
         const data = await res.json();
         setNodes(Array.isArray(data) ? data : []);
@@ -276,7 +293,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
     } catch {
       setNodes((prev) => prev ?? []);
     }
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     fetchNodes();
@@ -325,7 +342,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
   const handleEditSave = async (id: string, data: EditNodeFormData) => {
     const res = await fetch(`/api/nodes/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
       body: JSON.stringify(data),
     });
 
@@ -366,15 +383,15 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
         return { success: false, message: text.slice(0, 200) };
       }
     } catch (err: any) {
-      return {
-        success: false,
-        message: err?.message || 'Unable to reach backend server',
-      };
-    }
+  return {
+    success: false,
+    message: err?.message || 'Unable to reach backend server',
+  };
+}
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/nodes/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/nodes/${id}`, { method: 'DELETE', headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
 
     if (!res.ok) {
       const text = await res.text();
@@ -416,23 +433,24 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
 
   const safeNodes = nodes ?? [];
 
-  const onlineCount  = safeNodes.filter((n) => n.status === 'online').length;
-  const offlineCount = safeNodes.filter((n) => n.status === 'offline').length;
-  const warningCount = safeNodes.filter((n) => n.status === 'warning').length;
+const onlineCount  = safeNodes.filter((n) => n.status === 'online').length;
+const offlineCount = safeNodes.filter((n) => n.status === 'offline').length;
+const warningCount = safeNodes.filter((n) => n.status === 'warning').length;
 
-  const filteredNodes = safeNodes.filter((node) => {
-    const matchesSearch =
-      node.displayName?.toLowerCase().includes(search.toLowerCase()) ||
-      node.ipAddress?.toLowerCase().includes(search.toLowerCase());
+const filteredNodes = safeNodes.filter((node) => {
+  const matchesSearch =
+    !search ||
+    node.displayName?.toLowerCase().includes(search.toLowerCase()) ||
+    node.ipAddress?.toLowerCase().includes(search.toLowerCase());
 
-    const matchesFilter =
-      filter === 'ALL' ||
-      (filter === 'ONLINE'  && node.status === 'online') ||
-      (filter === 'OFFLINE' && node.status === 'offline') ||
-      (filter === 'WARNING' && node.status === 'warning');
+  const matchesFilter =
+    filter === 'ALL' ||
+    (filter === 'ONLINE' && node.status === 'online') ||
+    (filter === 'OFFLINE' && node.status === 'offline') ||
+    (filter === 'WARNING' && node.status === 'warning');
 
-    return matchesSearch && matchesFilter;
-  });
+  return matchesSearch && matchesFilter;
+});
 
   // ── UI ───────────────────────────────────────────────────────────────────
 
@@ -550,8 +568,9 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage }: Props) 
                   node={node}
                   metrics={metrics.get(node.id)}
                   onViewDetails={onViewDetails}
-                  onEditClick={setEditTarget}
+                  onEditClick={isIntern ? () => {} : setEditTarget}
                   onOpenTerminal={handleOpenTerminal}
+                  isIntern={isIntern}
                 />
               ))}
             </div>

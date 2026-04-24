@@ -7,6 +7,16 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
+import 'dotenv/config';
+
+// --------------------------------------------------
+// Supabase admin client (service role — backend only)
+// --------------------------------------------------
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 // --------------------------------------------------
 // Paths
@@ -19,6 +29,129 @@ const NODES_FILE = path.join(__dirname, 'nodes.json');
 // --------------------------------------------------
 // Types
 // --------------------------------------------------
+/**
+ * Parse `iostat -d 1 2` output.
+ * We grab the LAST device block (second sample) and sum kB_read/s + kB_wrtn/s.
+ * Returns MB/s values. Returns {0,0} on any parse failure.
+ */
+function parseIostat(raw: string): { diskRead: number; diskWrite: number } {
+  try {
+    // Split into two samples separated by blank lines; take the last one
+    const blocks = raw.split(/\n\s*\n/).filter(b => b.trim());
+    const sample = blocks[blocks.length - 1] || '';
+    const lines = sample.split('\n').map(l => l.trim()).filter(Boolean);
+
+    let readKB = 0;
+    let writeKB = 0;
+
+    // Header line looks like: Device  tps  kB_read/s  kB_wrtn/s  kB_read  kB_wrtn
+    const headerLine = lines.find(l => /kB_read/i.test(l));
+    if (!headerLine) return { diskRead: 0, diskWrite: 0 };
+
+    const headers = headerLine.split(/\s+/);
+    const readIdx  = headers.findIndex(h => /kB_read\/s/i.test(h));
+    const writeIdx = headers.findIndex(h => /kB_wrtn\/s/i.test(h));
+    if (readIdx === -1 || writeIdx === -1) return { diskRead: 0, diskWrite: 0 };
+
+    for (const line of lines) {
+      if (/^Device|^Linux|^\s*$/.test(line)) continue;
+      const cols = line.split(/\s+/);
+      if (cols.length <= Math.max(readIdx, writeIdx)) continue;
+      readKB  += parseFloat(cols[readIdx]  || '0') || 0;
+      writeKB += parseFloat(cols[writeIdx] || '0') || 0;
+    }
+
+    return {
+      diskRead:  readKB  / 1024,   // convert KB/s → MB/s
+      diskWrite: writeKB / 1024,
+    };
+  } catch {
+    return { diskRead: 0, diskWrite: 0 };
+  }
+}
+function runSSHCommand(node: any, command: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+
+    let output = '';
+    let errorOutput = '';
+    let settled = false;
+    const isRebootCommand =
+      command.includes('reboot') || command.includes('shutdown -r');
+
+    const doneResolve = (msg: string) => {
+      if (settled) return;
+      settled = true;
+      try { conn.end(); } catch {}
+      resolve(msg);
+    };
+
+    const doneReject = (err: any) => {
+      if (settled) return;
+      settled = true;
+      try { conn.end(); } catch {}
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+
+    conn.on('ready', () => {
+      conn.exec(command, (err, stream) => {
+        if (err) {
+          return doneReject(err);
+        }
+
+        stream.on('close', (code: number | null) => {
+          if (isRebootCommand) {
+            return doneResolve('Reboot command sent');
+          }
+
+          if (code === 0) {
+            return doneResolve(output || 'Command executed');
+          }
+
+          return doneReject(
+            new Error(errorOutput || `Command failed with code ${code}`)
+          );
+        });
+
+        stream.on('data', (data: Buffer) => {
+          output += data.toString();
+        });
+
+        stream.stderr.on('data', (data: Buffer) => {
+          errorOutput += data.toString();
+        });
+      });
+    });
+
+    conn.on('error', (err: any) => {
+      if (isRebootCommand && (err?.code === 'ECONNRESET' || err?.level === 'client-socket')) {
+        return doneResolve('Reboot command sent');
+      }
+      return doneReject(err);
+    });
+
+    conn.on('end', () => {
+      if (isRebootCommand) {
+        return doneResolve('Reboot command sent');
+      }
+    });
+
+    conn.on('close', () => {
+      if (isRebootCommand) {
+        return doneResolve('Reboot command sent');
+      }
+    });
+
+    conn.connect({
+      host: node.ipAddress,
+      port: node.port || 22,
+      username: node.username,
+      ...(node.authType === 'privateKey'
+        ? { privateKey: sanitizePrivateKey(node.credential) }
+        : { password: node.credential }),
+    });
+  });
+}
 
 type NodeStatus = 'connecting' | 'online' | 'offline' | 'warning';
 
@@ -72,6 +205,7 @@ interface NodeMetrics {
 // --------------------------------------------------
 // Utils
 // --------------------------------------------------
+
 
 function nowIso() {
   return new Date().toISOString();
@@ -265,8 +399,17 @@ async function testSSH(node: Pick<NodeRecord, 'ipAddress' | 'port' | 'username' 
   }
 }
 
+// Track per-node fail counts for the 3-attempt offline promotion
+const pollFailCount = new Map<string, number>();
+
 async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let ssh: NodeSSH | null = null;
+
+  // Always initialise so the catch block can safely reference them
+  let diskRead  = 0;
+  let diskWrite = 0;
+  let netIn     = 0;
+  let netOut    = 0;
 
   try {
     ssh = await connectSSH(node);
@@ -280,21 +423,33 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cpuModelOut,
       cpuCoresOut,
       logsOut,
+      iostatOut,
     ] = await Promise.all([
-      sshExec(ssh, `LC_ALL=C top -bn1 | grep "Cpu(s)" || top -bn1 | grep "%Cpu(s)" || echo "Cpu(s): 0.0 us, 0.0 sy, 100.0 id"`),
+      sshExec(ssh, `LC_ALL=C top -bn1 | grep 'Cpu(s)' || top -bn1 | grep '%Cpu(s)' || echo 'Cpu(s): 0.0 us, 0.0 sy, 100.0 id'`),
       sshExec(ssh, `free -m`),
       sshExec(ssh, `uptime -p || uptime`),
-      sshExec(ssh, `cat /etc/os-release 2>/dev/null | grep "^PRETTY_NAME=" | cut -d= -f2 | tr -d '"' || uname -o`),
+      sshExec(ssh, `cat /etc/os-release 2>/dev/null | grep '^PRETTY_NAME=' | cut -d= -f2 | tr -d '"' || uname -o`),
       sshExec(ssh, `uname -r`),
-      sshExec(ssh, `lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:[[:space:]]*//' || cat /proc/cpuinfo | grep "model name" | head -n1 | cut -d: -f2 | sed 's/^ *//' || echo "unknown"`),
+      sshExec(ssh, `lscpu 2>/dev/null | grep 'Model name:' | sed 's/Model name:[[:space:]]*//' || cat /proc/cpuinfo | grep 'model name' | head -n1 | cut -d: -f2 | sed 's/^ *//' || echo 'unknown'`),
       sshExec(ssh, `nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0`),
-      sshExec(ssh, `tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 --no-pager 2>/dev/null || echo "No logs available"`),
+      sshExec(ssh, `tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 --no-pager 2>/dev/null || echo 'No logs available'`),
+      // iostat: 1-second sample, 2 readings; fall back gracefully if not installed
+      sshExec(ssh, `iostat -d 1 2 2>/dev/null || echo ''`),
     ]);
 
     const cpu = parseCpu(cpuOut);
     const mem = parseMemory(memOut);
     const ramPercent = mem.total > 0 ? Math.round((mem.used / mem.total) * 100) : 0;
+
+    // Disk I/O via iostat (graceful zero if missing)
+    const diskIO = parseIostat(iostatOut);
+    diskRead  = diskIO.diskRead;
+    diskWrite = diskIO.diskWrite;
+
     const status: 'online' | 'warning' = (cpu > 85 || ramPercent > 90) ? 'warning' : 'online';
+
+    // Reset fail counter on success
+    pollFailCount.set(node.id, 0);
 
     return {
       type: 'nodeMetrics',
@@ -309,10 +464,10 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cache: mem.cache,
       uptime: uptimeOut || 'unknown',
       ping: 0,
-      diskRead: 0,
-      diskWrite: 0,
-      netIn: 0,
-      netOut: 0,
+      diskRead,
+      diskWrite,
+      netIn,
+      netOut,
       logs: parseLogs(logsOut),
       os: osOut || 'unknown',
       kernel: kernelOut || 'unknown',
@@ -336,10 +491,10 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cache: 0,
       uptime: 'offline',
       ping: 0,
-      diskRead: 0,
-      diskWrite: 0,
-      netIn: 0,
-      netOut: 0,
+      diskRead,
+      diskWrite,
+      netIn,
+      netOut,
       logs: [{ time: new Date().toLocaleTimeString(), level: 'ERROR', message }],
       os: 'unknown',
       kernel: 'unknown',
@@ -359,16 +514,65 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
 // --------------------------------------------------
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+app.disable('etag');
 
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  res.setHeader('Cache-Control', 'no-store');
   next();
 });
+
+app.use(express.json({ limit: '10mb' }));
+
+// --------------------------------------------------
+// RBAC Middleware
+// --------------------------------------------------
+
+interface AuthedRequest extends express.Request {
+  userId?: string;
+  userRole?: string;
+}
+
+async function verifyToken(
+  req: AuthedRequest,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const auth = req.headers.authorization ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ message: 'Missing auth token' });
+  }
+
+  try {
+    // Verify JWT with Supabase
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) return res.status(401).json({ message: 'Invalid or expired token' });
+
+    // Fetch role from profiles table
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    req.userId   = user.id;
+    req.userRole = profile?.role ?? 'intern';
+    next();
+  } catch {
+    return res.status(401).json({ message: 'Auth error' });
+  }
+}
+
+function requireRole(...roles: string[]) {
+  return (req: AuthedRequest, res: express.Response, next: express.NextFunction) => {
+    if (!roles.includes(req.userRole ?? '')) {
+      return res.status(403).json({ message: `Requires role: ${roles.join(' or ')}` });
+    }
+    next();
+  };
+}
 
 app.use((req, _res, next) => {
   if (req.path.startsWith('/api')) {
@@ -380,14 +584,50 @@ app.use((req, _res, next) => {
 // --------------------------------------------------
 // API
 // --------------------------------------------------
+app.post('/api/nodes/:id/reboot', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const node = readNodes().find(n => n.id === id);
+    if (!node) {
+      return res.status(404).json({ message: 'Node not found' });
+    }
+
+    await runSSHCommand(
+      node,
+      'nohup sudo systemctl reboot >/dev/null 2>&1 &'
+    );
+
+    return res.json({
+      success: true,
+      message: 'Reboot command sent',
+    });
+  } catch (err: any) {
+    console.error('Reboot failed:', err);
+    return res.status(500).json({
+      message: err?.message || 'Failed to reboot node',
+    });
+  }
+});
 
 app.get('/api/status', (_req, res) => {
   res.json({ status: 'operational', version: '5.0.0' });
 });
 
-app.get('/api/nodes', (_req, res) => {
-  const safe = readNodes().map(({ credential, ...rest }) => rest);
-  res.json(safe);
+app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
+  const allNodes = readNodes().map(({ credential, ...rest }) => rest);
+
+  // Admins see everything
+  if (req.userRole === 'admin') return res.json(allNodes);
+
+  // Employees / Interns: only nodes assigned to them
+  const { data: assignments } = await supabaseAdmin
+    .from('node_assignments')
+    .select('node_id')
+    .eq('user_id', req.userId!);
+
+  const assignedIds = new Set((assignments ?? []).map((a: any) => a.node_id));
+  return res.json(allNodes.filter(n => assignedIds.has(n.id)));
 });
 
 app.get('/api/nodes/:id', (req, res) => {
@@ -430,7 +670,7 @@ app.post('/api/nodes/test', async (req, res) => {
   }
 });
 
-app.post('/api/nodes', async (req, res) => {
+app.post('/api/nodes', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
   try {
     const node: NodeRecord = {
       id: randomUUID(),
@@ -521,7 +761,7 @@ app.put('/api/nodes/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/nodes/:id', (req, res) => {
+app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), (req, res) => {
   const nodes = readNodes();
   const filtered = nodes.filter(n => n.id !== req.params.id);
 
@@ -531,6 +771,76 @@ app.delete('/api/nodes/:id', (req, res) => {
 
   writeNodes(filtered);
   res.json({ success: true });
+});
+
+// --------------------------------------------------
+// User Management API (admin / employee controlled)
+// --------------------------------------------------
+
+app.post('/api/users/create', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const { email, password, role, created_by } = req.body as {
+      email: string; password: string; role: string; created_by: string;
+    };
+
+    // Employees can only create interns
+    if (req.userRole === 'employee' && role !== 'intern') {
+      return res.status(403).json({ message: 'Employees can only create intern accounts' });
+    }
+
+    if (!email || !password || !role) {
+      return res.status(400).json({ message: 'email, password, and role are required' });
+    }
+
+    // Create auth user
+    const { data: newUser, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { role },
+    });
+
+    if (createErr || !newUser?.user) {
+      return res.status(500).json({ message: createErr?.message || 'Failed to create user' });
+    }
+
+    // Upsert profile with role + created_by
+    await supabaseAdmin.from('profiles').upsert({
+      id: newUser.user.id,
+      email,
+      role,
+      created_by: created_by || req.userId,
+    });
+
+    return res.status(201).json({ id: newUser.user.id, email, role });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const targetId = req.params.id;
+
+    // Employees can only delete their own interns
+    if (req.userRole === 'employee') {
+      const { data: target } = await supabaseAdmin
+        .from('profiles')
+        .select('created_by, role')
+        .eq('id', targetId)
+        .single();
+      if (!target || target.created_by !== req.userId || target.role !== 'intern') {
+        return res.status(403).json({ message: 'You can only delete interns you created' });
+      }
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
+    if (error) return res.status(500).json({ message: error.message });
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
 });
 
 // --------------------------------------------------
@@ -712,6 +1022,7 @@ server.on('upgrade', (req, socket, head) => {
 const pollingMap = new Map<string, boolean>();
 
 async function pollNode(node: NodeRecord) {
+  // Per-node guard: skip if already polling this node
   if (pollingMap.get(node.id)) return;
   pollingMap.set(node.id, true);
 
@@ -719,23 +1030,47 @@ async function pollNode(node: NodeRecord) {
     const metrics = await collectMetrics(node);
     broadcastMetrics(metrics);
 
+    // --- Update local JSON store ---
     const all = readNodes();
     const idx = all.findIndex(n => n.id === node.id);
-
     if (idx !== -1) {
-      all[idx].status = metrics.status;
-      all[idx].updatedAt = metrics.timestamp;
+      all[idx].status     = metrics.status;
+      all[idx].updatedAt  = metrics.timestamp;
       all[idx].uptimeOutput = metrics.uptime;
-      all[idx].error = metrics.status === 'offline' ? metrics.logs[0]?.message : undefined;
+      all[idx].error      = metrics.status === 'offline' ? metrics.logs[0]?.message : undefined;
       writeNodes(all);
     }
 
+    // --- Update Supabase (non-blocking) ---
+    if (metrics.status === 'offline') {
+      const fails = (pollFailCount.get(node.id) ?? 0) + 1;
+      pollFailCount.set(node.id, fails);
+
+      if (fails >= 3) {
+        supabaseAdmin
+          .from('nodes')
+          .update({ status: 'offline', updated_at: metrics.timestamp, error: metrics.logs[0]?.message })
+          .eq('id', node.id)
+          .then(() => {})
+          .catch(() => {});
+      }
+    } else {
+      pollFailCount.set(node.id, 0);
+      supabaseAdmin
+        .from('nodes')
+        .update({ status: metrics.status, updated_at: metrics.timestamp, error: null })
+        .eq('id', node.id)
+        .then(() => {})
+        .catch(() => {});
+    }
+
     console.log(
-      `[POLL] ${node.displayName} (${node.ipAddress}) → cpu=${metrics.cpu.toFixed(1)}% ram=${metrics.ramPercent}% status=${metrics.status}` +
+      `[POLL] ${node.displayName} (${node.ipAddress}) → cpu=${metrics.cpu.toFixed(1)}% ram=${metrics.ramPercent}% disk_r=${metrics.diskRead.toFixed(2)}MB/s status=${metrics.status}` +
       (metrics.status === 'offline' ? ` | ${metrics.logs[0]?.message ?? 'offline'}` : '')
     );
   } catch (err: any) {
-    console.error(`[POLL] Error polling ${node.displayName}:`, err?.message || err);
+    // Per-node isolation: log but don't rethrow so other nodes keep polling
+    console.error(`[POLL] Unexpected error for ${node.displayName}:`, err?.message || err);
   } finally {
     pollingMap.set(node.id, false);
   }
@@ -747,7 +1082,10 @@ function pollAllNodes() {
 
   console.log(`[POLL] Starting poll cycle — ${nodes.length} node(s)`);
   for (const node of nodes) {
-    void pollNode(node);
+    // Each node runs in its own promise chain — failures are isolated
+    void pollNode(node).catch(err =>
+      console.error(`[POLL] Unhandled in pollNode(${node.displayName}):`, err?.message)
+    );
   }
 }
 

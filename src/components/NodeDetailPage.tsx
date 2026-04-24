@@ -9,6 +9,7 @@ import {
   LineChart, Line, CartesianGrid,
 } from 'recharts';
 import { wsUrl } from '../utils/wsUrl';
+import { useAuth } from '../context/AuthContext';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ interface NetPoint   { time: string; inbound: number; outbound: number; }
 interface Props {
   nodeId: string;
   onBack: () => void;
+  onOpenTerminalPage?: (nodeId: string, nodeName: string) => void;
+  role?: 'admin' | 'employee' | 'intern';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,20 +109,32 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function NodeDetailPage({ nodeId, onBack }: Props) {
+export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, role }: Props) {
+  const { session } = useAuth();
+  const isIntern = role === 'intern';
   const [node,    setNode]    = useState<NodeRecord | null>(null);
   const [metrics, setMetrics] = useState<NodeMetrics | null>(null);
   const [cpuHist, setCpuHist] = useState<ChartPoint[]>([]);
   const [netHist, setNetHist] = useState<NetPoint[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
+  const handleOpenTerminal = () => {
+  if (!node) return;
+  onOpenTerminalPage?.(node.id, node.displayName);
+};
+
+
 
   // Fetch node info
   useEffect(() => {
-    fetch(`/api/nodes/${nodeId}`)
+    fetch(`/api/nodes/${nodeId}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    })
       .then(r => r.ok ? r.json() : null)
       .then(d => d && setNode(d))
       .catch(() => {});
-  }, [nodeId]);
+  }, [nodeId, session]);
+
+  
 
   // WebSocket for live metrics
   useEffect(() => {
@@ -194,22 +209,22 @@ export default function NodeDetailPage({ nodeId, onBack }: Props) {
 
       {/* ── Action Buttons ────────────────────────────────────── */}
       <div className="flex gap-3 mb-8 flex-wrap">
-        {[
-          { icon: Terminal,          label: 'Open Terminal'  },
-          { icon: RotateCcw,         label: 'Soft Reboot'   },
-          { icon: SlidersHorizontal, label: 'Update Config' },
-        ].map(({ icon: Icon, label }) => (
-          <button
-            key={label}
-            className="flex items-center gap-2 bg-[#141414] border border-[#2F2F2F] hover:border-neon-lime/30 text-white text-sm font-bold px-5 py-2.5 rounded-lg transition-all hover:bg-neon-lime/5"
-          >
-            <Icon size={15} /> {label}
-          </button>
-        ))}
-        <button className="flex items-center gap-2 bg-red-600/10 border border-red-600/30 hover:border-red-500 text-red-400 hover:text-red-300 text-sm font-bold px-5 py-2.5 rounded-lg transition-all">
-          <PowerOff size={15} /> Force Shutdown
-        </button>
-      </div>
+  {[
+    { icon: Terminal,          label: 'Open Terminal',  onClick: handleOpenTerminal, alwaysShow: true },
+    { icon: RotateCcw,         label: 'Soft Reboot',    onClick: handleSoftReboot,   alwaysShow: false },
+    { icon: SlidersHorizontal, label: 'Update Config',  onClick: undefined,          alwaysShow: false },
+  ]
+    .filter(item => item.alwaysShow || !isIntern)
+    .map(({ icon: Icon, label, onClick }) => (
+    <button
+      key={label}
+      onClick={onClick}
+      className="flex items-center gap-2 bg-[#141414] border border-[#2F2F2F] hover:border-neon-lime/30 text-white text-sm font-bold px-5 py-2.5 rounded-lg transition-all hover:bg-neon-lime/5"
+    >
+      <Icon size={15} /> {label}
+    </button>
+  ))}
+</div>
 
       {/* ── Charts Row ───────────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-5 mb-5">

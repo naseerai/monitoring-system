@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from './context/AuthContext';
+import LoginPage from './components/LoginPage';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import NodesPage from './components/NodesPage';
 import NodeDetailPage from './components/NodeDetailPage';
 import TerminalPage from './components/TerminalPage';
+import UserManagementPage from './components/UserManagementPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal';
+type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users';
 
 interface NodeRecord {
   id: string;
@@ -19,40 +22,43 @@ interface NodeRecord {
 }
 
 export default function App() {
+  const { session, profile, loading } = useAuth();
+
   const [page, setPage] = useState<Page>('dashboard');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [terminalNodeId, setTerminalNodeId] = useState<string | null>(null);
   const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
 
-  // Fetch all nodes for tab navigation in TerminalPage
-  useEffect(() => {
-    fetch('/api/nodes')
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setAllNodes(Array.isArray(data) ? data : []))
-      .catch(() => {});
-  }, []);
+  // ── Fetch nodes (with auth token) ────────────────────────────────────────
+  const fetchNodes = () => {
+  if (!session?.access_token) return;
 
-  // Hash-based routing: #nodes, #nodes/ID, #terminal/ID, default = dashboard
+  fetch('/api/nodes', {
+    cache: 'no-store',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Cache-Control': 'no-cache',
+    },
+  })
+    .then(r => r.json())
+    .then(data => setAllNodes(Array.isArray(data) ? data : []))
+    .catch(() => {});
+};
+
+  useEffect(() => {
+    fetchNodes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // ── Hash-based routing ────────────────────────────────────────────────────
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash.replace('#', '');
-      if (hash.startsWith('terminal/')) {
-        const id = hash.replace('terminal/', '');
-        setTerminalNodeId(id);
-        setPage('terminal');
-      } else if (hash.startsWith('nodes/')) {
-        setSelectedNodeId(hash.replace('nodes/', ''));
-        setPage('node-detail');
-        setTerminalNodeId(null);
-      } else if (hash === 'nodes') {
-        setPage('nodes');
-        setSelectedNodeId(null);
-        setTerminalNodeId(null);
-      } else {
-        setPage('dashboard');
-        setSelectedNodeId(null);
-        setTerminalNodeId(null);
-      }
+      if (hash.startsWith('terminal/')) { setTerminalNodeId(hash.replace('terminal/', '')); setPage('terminal'); }
+      else if (hash.startsWith('nodes/')) { setSelectedNodeId(hash.replace('nodes/', '')); setPage('node-detail'); setTerminalNodeId(null); }
+      else if (hash === 'nodes') { setPage('nodes'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'users') { setPage('users'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
     handleHash();
     window.addEventListener('hashchange', handleHash);
@@ -61,18 +67,30 @@ export default function App() {
 
   const navigate = (to: string) => { window.location.hash = to; };
 
+  // ── Loading spinner ───────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-neon-dark flex items-center justify-center">
+        <span className="w-8 h-8 border-2 border-neon-lime/30 border-t-neon-lime rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // ── Auth gate ─────────────────────────────────────────────────────────────
+  if (!session) return <LoginPage />;
+
+  const role = profile?.role ?? 'intern';
+
   return (
     <ErrorBoundary>
       <div className="flex h-screen overflow-hidden font-display">
-        {/* Sidebar is hidden on the terminal full-page view */}
         {page !== 'terminal' && (
           <ErrorBoundary>
-            <Sidebar activePage={page} onNavigate={navigate} />
+            <Sidebar activePage={page} onNavigate={navigate} role={role} />
           </ErrorBoundary>
         )}
 
         <main className="flex-1 flex flex-col bg-neon-dark relative overflow-hidden">
-          {/* Ambient glow — only on non-terminal pages */}
           {page !== 'terminal' && (
             <>
               <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-neon-lime/10 blur-[150px] -z-10 rounded-full" />
@@ -83,19 +101,22 @@ export default function App() {
           <ErrorBoundary>
             {page === 'dashboard' && <Dashboard />}
 
-            {page === 'nodes' && (
-              <NodesPage
-                onViewDetails={(id) => navigate(`nodes/${id}`)}
-                onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
-              />
-            )}
+{page === 'nodes' && (
+  <NodesPage
+    onViewDetails={(id) => navigate(`nodes/${id}`)}
+    onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
+    role={role}
+  />
+)}
 
-            {page === 'node-detail' && selectedNodeId && (
-              <NodeDetailPage
-                nodeId={selectedNodeId}
-                onBack={() => navigate('nodes')}
-              />
-            )}
+{page === 'node-detail' && selectedNodeId && (
+  <NodeDetailPage
+    nodeId={selectedNodeId}
+    onBack={() => navigate('nodes')}
+    onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
+    role={role}
+  />
+)}
 
             {page === 'terminal' && terminalNodeId && (
               <TerminalPage
@@ -104,6 +125,10 @@ export default function App() {
                 allNodes={allNodes.slice(0, 3)}
                 onNavigateNode={(id) => navigate(`terminal/${id}`)}
               />
+            )}
+
+            {page === 'users' && (role === 'admin' || role === 'employee') && (
+              <UserManagementPage />
             )}
           </ErrorBoundary>
         </main>

@@ -12,10 +12,12 @@ import {
   Clock,
   Cpu,
   Terminal as TerminalIcon,
+  Lock,
 } from 'lucide-react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
+import { useAuth } from '../context/AuthContext';
 
 interface NodeRecord {
   id: string;
@@ -42,6 +44,7 @@ interface TerminalPageProps {
   /** Optional: all nodes list, for breadcrumb tab navigation */
   allNodes?: NodeRecord[];
   onNavigateNode?: (id: string) => void;
+  role?: 'admin' | 'employee' | 'intern';
 }
 
 // ─── WebSocket URL helper ────────────────────────────────────────────────────
@@ -78,7 +81,9 @@ const DEMO_COMMANDS = [
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode }: TerminalPageProps) {
+export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode, role }: TerminalPageProps) {
+  const { session } = useAuth();
+  const isIntern = role === 'intern';
   const containerRef  = useRef<HTMLDivElement | null>(null);
   const terminalRef   = useRef<Terminal | null>(null);
   const fitAddonRef   = useRef<FitAddon | null>(null);
@@ -103,11 +108,13 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode 
 
   // Fetch node info
   useEffect(() => {
-    fetch(`/api/nodes/${nodeId}`)
+    fetch(`/api/nodes/${nodeId}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    })
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data) setNode(data); })
       .catch(() => {});
-  }, [nodeId]);
+  }, [nodeId, session]);
 
   // Connect metrics WebSocket for live data
   useEffect(() => {
@@ -223,12 +230,12 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode 
     };
 
     term.onData((data) => {
+      if (isIntern) {
+        // Block all keyboard input for read-only mode
+        return;
+      }
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
-        // Track commands (on Enter)
-        if (data === '\r') {
-          // xterm buffers lines — we rely on server echo for history display
-        }
       }
     });
 
@@ -374,15 +381,18 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode 
 
             {/* xterm.js container */}
             <div
-              className="flex-1 overflow-hidden p-2"
+              className="flex-1 overflow-hidden p-2 relative"
               style={{ background: '#0A0A0A' }}
             >
+              {isIntern && (
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full">
+                  <Lock size={10} /> Read-Only Mode — Input Disabled
+                </div>
+              )}
               <div
                 ref={containerRef}
                 className="h-full w-full"
-                style={{
-                  filter: 'drop-shadow(0 0 10px rgba(212,255,0,0.12))',
-                }}
+                style={{ filter: 'drop-shadow(0 0 10px rgba(212,255,0,0.12))' }}
               />
             </div>
 

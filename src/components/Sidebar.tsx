@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   LayoutDashboard, Database, Shield, ScrollText, Settings,
-  LifeBuoy, Power, Plus, Server, Loader2,
+  LifeBuoy, Power, Plus, Server, Loader2, Users, Globe,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import AddNodeModal, { NodeFormData } from './AddNodeModal';
+import { useAuth } from '../context/AuthContext';
 
 export interface NodeRecord {
   id: string;
@@ -23,6 +24,7 @@ export interface NodeRecord {
 interface SidebarProps {
   activePage: string;
   onNavigate: (to: string) => void;
+  role: 'admin' | 'employee' | 'intern';
 }
 
 interface NavItemProps {
@@ -54,14 +56,17 @@ function NodeStatusDot({ status }: { status: NodeRecord['status'] }) {
   return <span className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)] flex-shrink-0" />;
 }
 
-export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
+export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) {
+  const { signOut, session, profile } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
-  // null = still loading; [] = loaded but empty
-  const [nodes, setNodes] = useState<NodeRecord[] | null>(null);
+  const [nodes, setNodes]         = useState<NodeRecord[] | null>(null);
 
   const fetchNodes = useCallback(async () => {
+    if (!session?.access_token) return;
     try {
-      const res = await fetch('/api/nodes');
+      const res = await fetch('/api/nodes', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
       if (res.ok) {
         const data = await res.json();
         setNodes(Array.isArray(data) ? data : []);
@@ -71,7 +76,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
     } catch {
       setNodes(prev => prev ?? []);
     }
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     fetchNodes();
@@ -82,7 +87,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const handleTest = async (data: NodeFormData): Promise<{ success: boolean; message: string }> => {
     const res = await fetch('/api/nodes/test', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
       body: JSON.stringify(data),
     });
     const text = await res.text();
@@ -96,14 +101,15 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
       id: tempId, displayName: data.displayName, ipAddress: data.ipAddress,
       username: data.username, port: parseInt(data.port) || 22,
       authType: data.authType, status: 'connecting', createdAt: new Date().toISOString(),
-    }, ...prev]);
+    }, ...(prev ?? [])]);
 
     const res = await fetch('/api/nodes', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
       body: JSON.stringify(data),
     });
     const text = await res.text();
-    setNodes(prev => prev.filter(n => n.id !== tempId));
+    setNodes(prev => (prev ?? []).filter(n => n.id !== tempId));
     if (!res.ok) {
       await fetchNodes();
       let msg = `Server error (HTTP ${res.status})`;
@@ -131,12 +137,28 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
         <nav className="flex-1 space-y-0.5">
           <NavItem icon={LayoutDashboard} label="Dashboard" active={activePage === 'dashboard'} onClick={() => onNavigate('')} />
           <NavItem icon={Database}        label="Nodes"     active={activePage === 'nodes' || activePage === 'node-detail'} onClick={() => onNavigate('nodes')} />
-          <NavItem icon={Shield}          label="Security"  active={false} onClick={() => {}} />
-          <NavItem icon={ScrollText}      label="Logs"      active={false} onClick={() => {}} />
-          <NavItem icon={Settings}        label="Settings"  active={false} onClick={() => {}} />
+
+          {/* Admin: Global Fleet tab */}
+          {role === 'admin' && (
+            <NavItem icon={Globe}   label="Global Fleet" active={activePage === 'users'} onClick={() => onNavigate('users')} />
+          )}
+
+          {/* Employee: Team Management tab */}
+          {role === 'employee' && (
+            <NavItem icon={Users}   label="Team Management" active={activePage === 'users'} onClick={() => onNavigate('users')} />
+          )}
+
+          {/* Hidden for interns */}
+          {role !== 'intern' && (
+            <>
+              <NavItem icon={Shield}     label="Security" active={false} onClick={() => {}} />
+              <NavItem icon={ScrollText} label="Logs"     active={false} onClick={() => {}} />
+              <NavItem icon={Settings}   label="Settings" active={false} onClick={() => {}} />
+            </>
+          )}
         </nav>
 
-        {/* Mini node status summary */}
+        {/* Fleet status */}
         {safeNodes.length > 0 && (
           <div className="mx-4 mb-4 p-3 rounded-lg bg-[#141414] border border-[#1F1F1F]">
             <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-gray-600 mb-2">Fleet Status</p>
@@ -148,30 +170,49 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
           </div>
         )}
 
+        {/* User info pill */}
+        <div className="mx-4 mb-3 px-3 py-2 rounded-lg bg-[#141414] border border-[#1F1F1F] flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-neon-lime/20 flex items-center justify-center text-[10px] font-bold text-neon-lime flex-shrink-0">
+            {profile?.email?.[0]?.toUpperCase() ?? '?'}
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] text-white font-medium truncate">{profile?.email}</p>
+            <p className="text-[9px] text-gray-500 uppercase tracking-widest">{role}</p>
+          </div>
+        </div>
+
         {/* Bottom actions */}
         <div className="px-4 space-y-1 mt-2">
-          <button
-            id="btn-new-node"
-            onClick={() => setModalOpen(true)}
-            className="w-full bg-neon-lime text-black flex items-center justify-center gap-2 py-3 rounded-lg font-bold text-sm cursor-pointer hover:bg-[#BDE600] transition-colors neon-glow"
-          >
-            <Plus size={16} /> Deploy New Node
-          </button>
+          {/* Deploy New Node: hidden for interns */}
+          {role !== 'intern' && (
+            <button
+              id="btn-new-node"
+              onClick={() => setModalOpen(true)}
+              className="w-full bg-neon-lime text-black flex items-center justify-center gap-2 py-3 rounded-lg font-bold text-sm cursor-pointer hover:bg-[#BDE600] transition-colors neon-glow"
+            >
+              <Plus size={16} /> Deploy New Node
+            </button>
+          )}
           <div className="flex items-center gap-3 px-3 py-2.5 text-gray-500 hover:text-white cursor-pointer rounded-lg hover:bg-white/5 transition-all">
             <LifeBuoy size={18} /><span className="text-sm font-medium">Support</span>
           </div>
-          <div className="flex items-center gap-3 px-3 py-2.5 text-gray-500 hover:text-white cursor-pointer rounded-lg hover:bg-white/5 transition-all">
+          <button
+            onClick={signOut}
+            className="w-full flex items-center gap-3 px-3 py-2.5 text-gray-500 hover:text-red-400 cursor-pointer rounded-lg hover:bg-white/5 transition-all"
+          >
             <Power size={18} /><span className="text-sm font-medium">Sign Out</span>
-          </div>
+          </button>
         </div>
       </aside>
 
-      <AddNodeModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSave={handleSave}
-        onTest={handleTest}
-      />
+      {role !== 'intern' && (
+        <AddNodeModal
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          onSave={handleSave}
+          onTest={handleTest}
+        />
+      )}
     </>
   );
 }
