@@ -44,7 +44,7 @@ export default function LoginPage() {
               <Shield size={28} className="text-neon-lime" />
             </div>
             <h1 className="text-2xl font-bold tracking-tighter text-white">MYACCESS</h1>
-            <p className="text-[10px] text-gray-500 tracking-[0.3em] uppercase mt-1">Neon Sentry Platform</p>
+            <p className="text-[10px] text-gray-500 tracking-[0.3em] uppercase mt-1">Server Monitoring System</p>
           </div>
 
           {/* Form */}

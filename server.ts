@@ -1504,6 +1504,15 @@ const PORT = Number(process.env.PORT || 3000);
 
 setTimeout(pollAllNodes, 3000);
 setInterval(pollAllNodes, 10000);
+// --------------------------------------------------
+// Serve Frontend (Vite build)
+// --------------------------------------------------
+
+app.use(express.static(path.join(__dirname, "dist")));
+
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');

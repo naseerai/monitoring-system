@@ -1,20 +1,16 @@
 /**
- * wsUrl() — Returns the correct WebSocket URL.
+ * wsUrl() — Returns the correct WebSocket URL for both
+ * development (Vite) and production (Docker / Express).
  *
- * When running through Vite's dev proxy (port 5173), the proxy config
- * forwards the '/ws' path to ws://localhost:3000. When running in
- * production (or when the backend serves the frontend directly on port 3000),
- * we connect directly to window.location.host with no path.
+ * Always connects to '/ws' because backend upgrades happen on /ws.
  */
-export function wsUrl(): string {
+
+export function wsUrl(path: string = '/ws'): string {
+  // Detect protocol (http → ws, https → wss)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host     = window.location.host;
 
-  // Vite proxy: frontend runs on 5173, backend on 3000 → use /ws path
-  if (window.location.port === '5173') {
-    return `${protocol}//${host}/ws`;
-  }
+  // Current host (includes port automatically)
+  const host = window.location.host;
 
-  // Backend serving frontend directly (port 3000) → connect to root
-  return `${protocol}//${host}`;
+  return `${protocol}//${host}${path}`;
 }

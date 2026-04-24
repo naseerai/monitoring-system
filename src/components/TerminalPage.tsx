@@ -280,7 +280,7 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode,
         {/* Left: brand + breadcrumb */}
         <div className="flex items-center gap-4">
           <div className="mr-2">
-            <p className="text-xs font-bold tracking-[0.25em] text-[#D4FF00] uppercase">Neon Sentry</p>
+            <p className="text-xs font-bold tracking-[0.25em] text-[#D4FF00] uppercase">Myaccess</p>
             <p className="text-[9px] text-[#D4FF00]/40 uppercase tracking-[0.15em]">Terminal › {nodeName}</p>
           </div>
 
