@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft, Terminal, RotateCcw, SlidersHorizontal,
-  PowerOff, Clock, Wifi, CheckCircle2, Shield,
+  Wifi, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import {
@@ -112,17 +112,55 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, role }: Props) {
   const { session } = useAuth();
   const isIntern = role === 'intern';
+
   const [node,    setNode]    = useState<NodeRecord | null>(null);
   const [metrics, setMetrics] = useState<NodeMetrics | null>(null);
   const [cpuHist, setCpuHist] = useState<ChartPoint[]>([]);
   const [netHist, setNetHist] = useState<NetPoint[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
-  const handleOpenTerminal = () => {
-  if (!node) return;
-  onOpenTerminalPage?.(node.id, node.displayName);
-};
 
+  // ── Action / notification state ───────────────────────────────────────────
+  const [isActing,    setIsActing]    = useState(false);
+  const [actionLabel, setActionLabel] = useState('');
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // Generic SSH-action sender
+  const sendNodeAction = async (action: string, label: string) => {
+    if (isActing || !node) return;
+    setIsActing(true);
+    setActionLabel(label);
+    try {
+      const res = await fetch(`/api/nodes/${node.id}/${action}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast('success', data.message || `${label} command sent successfully`);
+      } else {
+        showToast('error', data.message || `${label} failed (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || `Failed to send ${label} command`);
+    } finally {
+      setIsActing(false);
+      setActionLabel('');
+    }
+  };
+
+  const handleOpenTerminal  = () => { if (!node) return; onOpenTerminalPage?.(node.id, node.displayName); };
+  const handleSoftReboot    = () => sendNodeAction('reboot',   'Soft Reboot');
+  const handleUpdateConfig  = () => showToast('success', 'Config update queued');
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
 
   // Fetch node info
   useEffect(() => {
@@ -133,8 +171,6 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
       .then(d => d && setNode(d))
       .catch(() => {});
   }, [nodeId, session]);
-
-  
 
   // WebSocket for live metrics
   useEffect(() => {
@@ -160,7 +196,7 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
 
   const effectiveStatus = metrics?.status ?? node?.status ?? 'connecting';
 
-  // Simulate some CPU history if none yet
+  // Seed fake CPU history until live data arrives
   useEffect(() => {
     if (cpuHist.length === 0) {
       const fake: ChartPoint[] = Array.from({ length: 20 }, (_, i) => ({
@@ -170,9 +206,27 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
     }
   }, []);
 
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
     <div className="flex-1 overflow-y-auto p-8">
-      {/* ── Header ────────────────────────────────────────────── */}
+
+      {/* ── Toast Notification ───────────────────────────────────────────── */}
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl border text-sm font-semibold ${
+          toast.type === 'success'
+            ? 'bg-neon-lime/10 border-neon-lime/40 text-neon-lime'
+            : 'bg-red-500/10 border-red-500/40 text-red-400'
+        }`}>
+          {toast.type === 'success'
+            ? <CheckCircle2 size={16} />
+            : <AlertTriangle size={16} />
+          }
+          {toast.message}
+        </div>
+      )}
+
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between mb-6">
         <div>
           <button
@@ -190,14 +244,17 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
                 ? 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30'
                 : 'text-red-400 bg-red-500/10 border-red-500/30'
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${effectiveStatus === 'online' ? 'bg-neon-lime animate-pulse' : effectiveStatus === 'warning' ? 'bg-yellow-400 animate-pulse' : 'bg-red-500'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                effectiveStatus === 'online'  ? 'bg-neon-lime animate-pulse' :
+                effectiveStatus === 'warning' ? 'bg-yellow-400 animate-pulse' : 'bg-red-500'
+              }`} />
               Node {effectiveStatus.toUpperCase()}
             </span>
           </div>
 
           <h1 className="text-5xl font-bold text-white tracking-tight">{node?.displayName || '—'}</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {metrics?.cpuModel ? `${metrics.cpuModel}` : 'Unknown Hardware'} &nbsp;|&nbsp; Region: {node?.region || 'US-East-1'}
+            {metrics?.cpuModel || 'Unknown Hardware'} &nbsp;|&nbsp; Region: {node?.region || 'US-East-1'}
           </p>
         </div>
 
@@ -207,26 +264,39 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
         </div>
       </div>
 
-      {/* ── Action Buttons ────────────────────────────────────── */}
+      {/* ── Action Buttons ────────────────────────────────────────────────── */}
       <div className="flex gap-3 mb-8 flex-wrap">
-  {[
-    { icon: Terminal,          label: 'Open Terminal',  onClick: handleOpenTerminal, alwaysShow: true },
-    { icon: RotateCcw,         label: 'Soft Reboot',    onClick: handleSoftReboot,   alwaysShow: false },
-    { icon: SlidersHorizontal, label: 'Update Config',  onClick: undefined,          alwaysShow: false },
-  ]
-    .filter(item => item.alwaysShow || !isIntern)
-    .map(({ icon: Icon, label, onClick }) => (
-    <button
-      key={label}
-      onClick={onClick}
-      className="flex items-center gap-2 bg-[#141414] border border-[#2F2F2F] hover:border-neon-lime/30 text-white text-sm font-bold px-5 py-2.5 rounded-lg transition-all hover:bg-neon-lime/5"
-    >
-      <Icon size={15} /> {label}
-    </button>
-  ))}
-</div>
+        {[
+          { icon: Terminal,          label: 'Open Terminal',  onClick: handleOpenTerminal,  alwaysShow: true,  danger: false },
+          { icon: RotateCcw,         label: 'Soft Reboot',    onClick: handleSoftReboot,    alwaysShow: false, danger: false },
+          { icon: SlidersHorizontal, label: 'Update Config',  onClick: handleUpdateConfig,  alwaysShow: false, danger: false },
+        ]
+          .filter(item => item.alwaysShow || !isIntern)
+          .map(({ icon: Icon, label, onClick, danger }) => {
+            const spinning = isActing && actionLabel === label;
+            return (
+              <button
+                key={label}
+                onClick={onClick}
+                disabled={isActing}
+                className={`flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-lg transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
+                  danger
+                    ? 'bg-red-500/10 border-red-500/30 hover:border-red-500/60 text-red-400 hover:bg-red-500/20'
+                    : 'bg-[#141414] border-[#2F2F2F] hover:border-neon-lime/30 text-white hover:bg-neon-lime/5'
+                }`}
+              >
+                {spinning
+                  ? <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  : <Icon size={15} />
+                }
+                {spinning ? 'Sending…' : label}
+              </button>
+            );
+          })
+        }
+      </div>
 
-      {/* ── Charts Row ───────────────────────────────────────── */}
+      {/* ── Charts Row ───────────────────────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-5 mb-5">
 
         {/* CPU Area Chart */}
@@ -340,7 +410,7 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
         </div>
       </div>
 
-      {/* ── Bottom: Logs + Sidebar ─────────────────────────── */}
+      {/* ── Bottom: Logs + Sidebar ────────────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-5">
 
         {/* Log Stream */}

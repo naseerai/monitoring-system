@@ -23,13 +23,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile,  setProfile]  = useState<Profile  | null>(null);
   const [loading,  setLoading]  = useState(true);
 
-  const fetchProfile = useCallback(async (uid: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', uid)
-      .single();
-    setProfile(data ?? null);
+  /**
+   * Fetch profile from the backend /api/profile endpoint.
+   * The backend uses the service-role key, so it bypasses any RLS issues
+   * and always returns the real role from the database.
+   */
+  const fetchProfile = useCallback(async (token: string) => {
+    try {
+      const res = await fetch('/api/profile', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data ?? null);
+      } else {
+        // Fallback: try Supabase direct (may hit RLS)
+        const { data } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', (await supabase.auth.getUser()).data.user?.id ?? '')
+          .single();
+        setProfile(data ?? null);
+      }
+    } catch {
+      setProfile(null);
+    }
   }, []);
 
   // Initialise & subscribe
@@ -37,15 +55,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setUser(data.session?.user ?? null);
-      if (data.session?.user) fetchProfile(data.session.user.id).finally(() => setLoading(false));
-      else setLoading(false);
+      if (data.session?.user && data.session.access_token) {
+        fetchProfile(data.session.access_token).finally(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess) => {
       setSession(sess);
       setUser(sess?.user ?? null);
-      if (sess?.user) fetchProfile(sess.user.id);
-      else setProfile(null);
+      if (sess?.user && sess.access_token) {
+        fetchProfile(sess.access_token);
+      } else {
+        setProfile(null);
+      }
     });
 
     return () => subscription.unsubscribe();

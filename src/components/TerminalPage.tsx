@@ -277,40 +277,27 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode,
 
       {/* ── Top Navigation ─────────────────────────────────────────────── */}
       <header className="flex items-center justify-between border-b border-[#1A1A00] bg-[#080800] px-6 py-3 flex-shrink-0">
-        {/* Left: brand + breadcrumb tabs */}
+        {/* Left: brand + breadcrumb */}
         <div className="flex items-center gap-4">
           <div className="mr-2">
             <p className="text-xs font-bold tracking-[0.25em] text-[#D4FF00] uppercase">Neon Sentry</p>
-            <p className="text-[9px] text-[#D4FF00]/40 uppercase tracking-[0.15em]">Terminal {nodeName}</p>
+            <p className="text-[9px] text-[#D4FF00]/40 uppercase tracking-[0.15em]">Terminal › {nodeName}</p>
           </div>
 
-          {/* Breadcrumb separator */}
           <ChevronRight size={14} className="text-[#D4FF00]/30" />
 
-          {/* Tabs */}
-          <nav className="flex items-center gap-1">
-            {/* Always show "The Vigilant Pulse" as parent */}
-            <button
-              onClick={onBack}
-              className="rounded-md px-3 py-1.5 text-xs font-semibold text-[#D4FF00]/60 hover:text-[#D4FF00] hover:bg-[#D4FF00]/5 transition-colors"
-            >
-              The Vigilant Pulse
-            </button>
-            {/* Show sibling nodes as tabs */}
-            {(allNodes ?? []).slice(0, 3).map((n, i) => (
-              <button
-                key={n.id}
-                onClick={() => onNavigateNode?.(n.id)}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  n.id === nodeId
-                    ? 'bg-[#D4FF00]/10 text-[#D4FF00] border border-[#D4FF00]/30'
-                    : 'text-[#D4FF00]/50 hover:text-[#D4FF00] hover:bg-[#D4FF00]/5'
-                }`}
-              >
-                {n.displayName}
-              </button>
-            ))}
-          </nav>
+          {/* Back button */}
+          <button
+            onClick={onBack}
+            className="rounded-md px-3 py-1.5 text-xs font-semibold text-[#D4FF00]/60 hover:text-[#D4FF00] hover:bg-[#D4FF00]/5 transition-colors"
+          >
+            ← Fleet
+          </button>
+
+          {/* Current node tab — always active */}
+          <div className="rounded-md px-3 py-1.5 text-xs font-semibold bg-[#D4FF00]/10 text-[#D4FF00] border border-[#D4FF00]/30">
+            {nodeName}
+          </div>
         </div>
 
         {/* Right: search + icons */}

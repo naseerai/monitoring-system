@@ -138,14 +138,14 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
           <NavItem icon={LayoutDashboard} label="Dashboard" active={activePage === 'dashboard'} onClick={() => onNavigate('')} />
           <NavItem icon={Database}        label="Nodes"     active={activePage === 'nodes' || activePage === 'node-detail'} onClick={() => onNavigate('nodes')} />
 
-          {/* Admin: Global Fleet tab */}
+          {/* Admin: User Management tab */}
           {role === 'admin' && (
-            <NavItem icon={Globe}   label="Global Fleet" active={activePage === 'users'} onClick={() => onNavigate('users')} />
+            <NavItem icon={Shield} label="User Management" active={activePage === 'users'} onClick={() => onNavigate('users')} />
           )}
 
-          {/* Employee: Team Management tab */}
+          {/* Employee: Team tab */}
           {role === 'employee' && (
-            <NavItem icon={Users}   label="Team Management" active={activePage === 'users'} onClick={() => onNavigate('users')} />
+            <NavItem icon={Users} label="Team" active={activePage === 'users'} onClick={() => onNavigate('users')} />
           )}
 
           {/* Hidden for interns */}

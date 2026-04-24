@@ -405,11 +405,12 @@ const pollFailCount = new Map<string, number>();
 async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let ssh: NodeSSH | null = null;
 
-  // Always initialise so the catch block can safely reference them
-  let diskRead  = 0;
-  let diskWrite = 0;
-  let netIn     = 0;
-  let netOut    = 0;
+  // Explicitly declare BEFORE try/catch so catch block can always reference them.
+  // Do NOT move these inside the try block.
+  let diskRead: number  = 0;
+  let diskWrite: number = 0;
+  let netIn: number     = 0;
+  let netOut: number    = 0;
 
   try {
     ssh = await connectSSH(node);
@@ -582,37 +583,170 @@ app.use((req, _res, next) => {
 });
 
 // --------------------------------------------------
-// API
+// API — Node Actions (reboot only)
 // --------------------------------------------------
-app.post('/api/nodes/:id/reboot', async (req, res) => {
+app.post('/api/nodes/:id/reboot', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const { id } = req.params;
-
     const node = readNodes().find(n => n.id === id);
-    if (!node) {
-      return res.status(404).json({ message: 'Node not found' });
-    }
+    if (!node) return res.status(404).json({ message: 'Node not found' });
 
-    await runSSHCommand(
-      node,
-      'nohup sudo systemctl reboot >/dev/null 2>&1 &'
-    );
-
-    return res.json({
-      success: true,
-      message: 'Reboot command sent',
-    });
+    await runSSHCommand(node, 'nohup sudo reboot >/dev/null 2>&1 &');
+    return res.json({ success: true, message: 'Reboot command sent' });
   } catch (err: any) {
     console.error('Reboot failed:', err);
-    return res.status(500).json({
-      message: err?.message || 'Failed to reboot node',
-    });
+    return res.status(500).json({ message: err?.message || 'Failed to reboot node' });
   }
 });
+
 
 app.get('/api/status', (_req, res) => {
   res.json({ status: 'operational', version: '5.0.0' });
 });
+
+// --------------------------------------------------
+// Profile endpoint — always uses service role, bypasses RLS
+// --------------------------------------------------
+app.get('/api/profile', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', req.userId!)
+      .single();
+
+    if (error || !profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    return res.json(profile);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Admin-only: fetch ALL profiles (service role — bypasses RLS)
+// --------------------------------------------------
+app.get('/api/admin/users', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json(data ?? []);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// BULK sync node assignments for a user (admin/employee)
+// Body: { userId: string, nodeIds: string[] }
+// Algorithm: delete-all then insert-valid-new
+// Uses supabaseAdmin (service role key) — bypasses RLS.
+// --------------------------------------------------
+app.post('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const { userId, nodeIds } = req.body as { userId: string; nodeIds: string[] };
+
+    // ── Input validation ──────────────────────────────────────────────────
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ message: 'userId is required and must be a string' });
+    }
+    if (!Array.isArray(nodeIds)) {
+      return res.status(400).json({ message: 'nodeIds must be an array' });
+    }
+
+    // ── Validate nodeIds against the local nodes.json file ────────────────
+    // node_assignments.node_id has a FK to public.nodes(id) in Supabase.
+    // Our nodes live in the local JSON — after running migration 003 the FK
+    // is dropped, but we still filter to prevent garbage IDs from being saved.
+    const knownNodes  = readNodes();
+    const knownIds    = new Set(knownNodes.map(n => n.id));
+    const validIds    = nodeIds.filter(id => knownIds.has(id));
+    const rejectedIds = nodeIds.filter(id => !knownIds.has(id));
+
+    console.log('[ASSIGN] userId :', userId);
+    console.log('[ASSIGN] requested nodeIds :', nodeIds);
+    console.log('[ASSIGN] valid nodeIds     :', validIds);
+    if (rejectedIds.length > 0) {
+      console.warn('[ASSIGN] ⚠ rejected unknown node IDs:', rejectedIds);
+    }
+
+    // ── Step 1: Delete all existing assignments for this user ─────────────
+    const { error: delError } = await supabaseAdmin
+      .from('node_assignments')
+      .delete()
+      .eq('user_id', userId);
+
+    if (delError) {
+      console.error('[ASSIGN] Delete failed:', delError.message);
+      return res.status(500).json({ message: `Delete failed: ${delError.message}` });
+    }
+    console.log('[ASSIGN] Cleared existing assignments for user', userId);
+
+    // ── Step 2: Insert each valid nodeId individually ─────────────────────
+    const insertErrors: string[] = [];
+    for (const node_id of validIds) {
+      const { error: insError } = await supabaseAdmin
+        .from('node_assignments')
+        .insert({ user_id: userId, node_id, created_by: req.userId });
+
+      if (insError) {
+        console.error(`[ASSIGN] Insert failed for node ${node_id}:`, insError.message);
+        insertErrors.push(`${node_id}: ${insError.message}`);
+      } else {
+        console.log(`[ASSIGN] ✓ Assigned node ${node_id} → user ${userId}`);
+      }
+    }
+
+    if (insertErrors.length > 0) {
+      return res.status(207).json({
+        success: false,
+        assigned: validIds.length - insertErrors.length,
+        errors: insertErrors,
+        message: `${insertErrors.length} insert(s) failed. See errors array.`,
+      });
+    }
+
+    return res.json({
+      success:  true,
+      assigned: validIds.length,
+      rejected: rejectedIds,
+    });
+  } catch (err: any) {
+    console.error('[ASSIGN] Unexpected error:', err);
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Remove a single node assignment
+// --------------------------------------------------
+app.delete('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const { user_id, node_id } = req.body as { user_id: string; node_id: string };
+
+    if (!user_id || !node_id) {
+      return res.status(400).json({ message: 'user_id and node_id are required' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('node_assignments')
+      .delete()
+      .match({ user_id, node_id });
+
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+
 
 app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
   const allNodes = readNodes().map(({ credential, ...rest }) => rest);
@@ -670,7 +804,7 @@ app.post('/api/nodes/test', async (req, res) => {
   }
 });
 
-app.post('/api/nodes', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
+app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const node: NodeRecord = {
       id: randomUUID(),
@@ -837,6 +971,128 @@ app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), asyn
     const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
     if (error) return res.status(500).json({ message: error.message });
 
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Users list (admin sees all their employees; employee sees their interns)
+// --------------------------------------------------
+app.get('/api/users', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('created_by', req.userId!);
+
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json(data ?? []);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Node assignment endpoints
+// --------------------------------------------------
+
+// GET /api/users/:id/assignments — list node_ids assigned to a user
+app.get('/api/users/:id/assignments', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const targetId = req.params.id;
+
+    // Employees can only view assignments for their own interns
+    if (req.userRole === 'employee') {
+      const { data: target } = await supabaseAdmin
+        .from('profiles')
+        .select('created_by')
+        .eq('id', targetId)
+        .single();
+      if (!target || target.created_by !== req.userId) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('node_assignments')
+      .select('node_id')
+      .eq('user_id', targetId);
+
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json(data ?? []);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// POST /api/users/:id/assign-node — assign a node to a user
+app.post('/api/users/:id/assign-node', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const targetId = req.params.id;
+    const { node_id } = req.body as { node_id: string };
+
+    if (!node_id) return res.status(400).json({ message: 'node_id is required' });
+
+    // Employees can only assign nodes that are also assigned to themselves
+    if (req.userRole === 'employee') {
+      const { data: myAssignment } = await supabaseAdmin
+        .from('node_assignments')
+        .select('node_id')
+        .eq('user_id', req.userId!)
+        .eq('node_id', node_id)
+        .single();
+      if (!myAssignment) {
+        return res.status(403).json({ message: 'You can only assign nodes that are assigned to you' });
+      }
+
+      // Also verify the intern was created by this employee
+      const { data: target } = await supabaseAdmin
+        .from('profiles')
+        .select('created_by')
+        .eq('id', targetId)
+        .single();
+      if (!target || target.created_by !== req.userId) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    }
+
+    const { error } = await supabaseAdmin
+      .from('node_assignments')
+      .upsert({ user_id: targetId, node_id, created_by: req.userId }, { onConflict: 'user_id,node_id' });
+
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// DELETE /api/users/:id/assign-node/:nodeId — remove a node assignment
+app.delete('/api/users/:id/assign-node/:nodeId', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+  try {
+    const targetId = req.params.id;
+    const nodeId   = req.params.nodeId;
+
+    // Employees can only unassign from their own interns
+    if (req.userRole === 'employee') {
+      const { data: target } = await supabaseAdmin
+        .from('profiles')
+        .select('created_by')
+        .eq('id', targetId)
+        .single();
+      if (!target || target.created_by !== req.userId) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    }
+
+    const { error } = await supabaseAdmin
+      .from('node_assignments')
+      .delete()
+      .match({ user_id: targetId, node_id: nodeId });
+
+    if (error) return res.status(500).json({ message: error.message });
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
