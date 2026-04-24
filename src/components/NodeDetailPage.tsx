@@ -19,6 +19,17 @@ interface LogLine {
   message: string;
 }
 
+export interface DockerContainer {
+  id:      string;
+  image:   string;
+  command: string;
+  created: string;
+  status:  string;
+  ports:   string;
+  cpu:     string;
+  mem:     string;
+}
+
 interface NodeMetrics {
   nodeId: string;
   status: 'online' | 'offline' | 'warning';
@@ -41,6 +52,8 @@ interface NodeMetrics {
   cpuModel: string;
   cpuCores: number;
   publicIp: string;
+  docker: DockerContainer[];
+  dockerStatus: string;
 }
 
 interface NodeRecord {
@@ -117,6 +130,8 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
   const [metrics, setMetrics] = useState<NodeMetrics | null>(null);
   const [cpuHist, setCpuHist] = useState<ChartPoint[]>([]);
   const [netHist, setNetHist] = useState<NetPoint[]>([]);
+  const [docker,  setDocker]  = useState<DockerContainer[]>([]);
+  const [dockerStatus, setDockerStatus] = useState<string>('—');
   const logRef = useRef<HTMLDivElement>(null);
 
   // ── Action / notification state ───────────────────────────────────────────
@@ -183,6 +198,8 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
           const t = new Date().toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
           setCpuHist(prev => [...prev.slice(-29), { time: t, value: data.cpu ?? 0 }]);
           setNetHist(prev => [...prev.slice(-29), { time: t, inbound: data.netIn ?? 0, outbound: data.netOut ?? 0 }]);
+          if (Array.isArray(data.docker))  setDocker(data.docker);
+          if (data.dockerStatus)           setDockerStatus(data.dockerStatus);
         }
       } catch { /* ignore */ }
     };
@@ -391,9 +408,17 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
               <span className="w-1 h-1 rounded-full bg-neon-lime animate-pulse" /> Live Flow
             </span>
           </div>
-          <div className="flex items-center gap-4 text-[11px] font-bold">
-            <span className="flex items-center gap-1.5 text-neon-lime"><span className="w-3 h-0.5 bg-neon-lime rounded" /> Inbound</span>
-            <span className="flex items-center gap-1.5 text-gray-400"><span className="w-3 h-0.5 bg-gray-400 rounded" /> Outbound</span>
+          <div className="flex items-center gap-5 text-[11px] font-bold">
+            <span className="flex items-center gap-1.5 text-neon-lime">
+              <span className="w-3 h-0.5 bg-neon-lime rounded" />
+              Inbound&nbsp;
+              {metrics ? <span className="font-mono text-[10px] opacity-70">{metrics.netIn.toFixed(1)} kB/s</span> : null}
+            </span>
+            <span className="flex items-center gap-1.5 text-gray-400">
+              <svg width="12" height="2"><line x1="0" y1="1" x2="12" y2="1" stroke="#6B7280" strokeWidth="2" strokeDasharray="3 2"/></svg>
+              Outbound&nbsp;
+              {metrics ? <span className="font-mono text-[10px] opacity-70">{metrics.netOut.toFixed(1)} kB/s</span> : null}
+            </span>
           </div>
         </div>
         <div className="h-40">
@@ -401,13 +426,92 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
             <LineChart data={netHist.length ? netHist : [{ time: '—', inbound: 0, outbound: 0 }]}>
               <CartesianGrid stroke="#1F1F1F" strokeDasharray="3 3" />
               <XAxis dataKey="time" tick={false} axisLine={false} />
-              <YAxis tick={{ fill: '#4B5563', fontSize: 9 }} axisLine={false} tickLine={false} width={32} />
+              <YAxis tick={{ fill: '#4B5563', fontSize: 9 }} axisLine={false} tickLine={false} width={38}
+                tickFormatter={(v: number) => `${v.toFixed(0)}k`} />
               <Tooltip content={<CustomTooltip />} />
-              <Line type="monotone" dataKey="inbound"  name="In (kB/s)"  stroke="#D4FF00" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="outbound" name="Out (kB/s)" stroke="#6B7280" strokeWidth={2} dot={false} strokeDasharray="4 4" />
+              <Line type="monotone" dataKey="inbound"  name="In (kB/s)"  stroke="#D4FF00" strokeWidth={2} dot={false} animationDuration={300} />
+              <Line type="monotone" dataKey="outbound" name="Out (kB/s)" stroke="#6B7280" strokeWidth={2} dot={false} strokeDasharray="5 3" animationDuration={300} />
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      {/* ── Container Orchestration (Docker) ─────────────────────────────── */}
+      <div className="bg-[#111111] border border-[#1F1F1F] rounded-xl p-5 mb-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Container Orchestration</h3>
+            <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded border ${
+              dockerStatus === 'Running'
+                ? 'text-neon-lime bg-neon-lime/10 border-neon-lime/30'
+                : dockerStatus === 'Docker Not Found'
+                ? 'text-gray-500 bg-[#0D0D0D] border-[#222]'
+                : 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20'
+            }`}>{dockerStatus}</span>
+          </div>
+          {docker.length > 0 && (
+            <p className="text-[10px] text-gray-600 font-mono">{docker.length} container{docker.length !== 1 ? 's' : ''} running</p>
+          )}
+        </div>
+
+        {docker.length === 0 ? (
+          <div className="flex items-center justify-center py-8 text-gray-700 text-sm">
+            {dockerStatus === 'Docker Not Found'
+              ? '🐳 Docker is not installed on this node'
+              : dockerStatus === 'Offline'
+              ? '⚠ Node is offline'
+              : '⟳ Waiting for container data…'}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-[#1A1A1A]">
+                  {['Container ID', 'Image', 'Status', 'CPU', 'Memory', 'Ports'].map(h => (
+                    <th key={h} className="text-left text-[9px] font-bold uppercase tracking-[0.15em] text-gray-600 pb-2 pr-4">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {docker.map((c, i) => {
+                  const isRunning = c.status.toLowerCase().includes('up');
+                  return (
+                    <tr key={i} className="border-b border-[#111] hover:bg-neon-lime/[0.02] transition-colors">
+                      <td className="py-2.5 pr-4 font-mono text-gray-400">{c.id.slice(0, 12)}</td>
+                      <td className="py-2.5 pr-4">
+                        <span className="text-white font-semibold truncate max-w-[140px] block">{c.image}</span>
+                        <span className="text-gray-600 text-[9px] truncate max-w-[140px] block">{c.command.slice(0, 30)}</span>
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <span className={`flex items-center gap-1.5 font-bold ${
+                          isRunning ? 'text-neon-lime' : 'text-red-400'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            isRunning ? 'bg-neon-lime animate-pulse' : 'bg-red-500'
+                          }`} />
+                          {c.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <span className="bg-[#0D0D0D] border border-[#222] rounded px-2 py-0.5 font-mono text-[10px] text-white">
+                          {c.cpu}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <span className="bg-[#0D0D0D] border border-[#222] rounded px-2 py-0.5 font-mono text-[10px] text-white">
+                          {c.mem}
+                        </span>
+                      </td>
+                      <td className="py-2.5">
+                        <span className="text-gray-500 font-mono text-[9px] truncate max-w-[120px] block">{c.ports || '—'}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ── Bottom: Logs + Sidebar ────────────────────────────────────────── */}

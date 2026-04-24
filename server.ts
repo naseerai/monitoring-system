@@ -29,46 +29,127 @@ const NODES_FILE = path.join(__dirname, 'nodes.json');
 // --------------------------------------------------
 // Types
 // --------------------------------------------------
+
 /**
- * Parse `iostat -d 1 2` output.
- * We grab the LAST device block (second sample) and sum kB_read/s + kB_wrtn/s.
- * Returns MB/s values. Returns {0,0} on any parse failure.
+ * Parse `iostat -dy 1 1` output.
+ * The -y flag skips the since-boot summary so only the 1-second sample is shown.
+ * Sums kB_read/s + kB_wrtn/s across all devices and converts to MB/s.
+ * Returns {0,0} on any parse/missing-tool failure.
  */
 function parseIostat(raw: string): { diskRead: number; diskWrite: number } {
   try {
-    // Split into two samples separated by blank lines; take the last one
-    const blocks = raw.split(/\n\s*\n/).filter(b => b.trim());
-    const sample = blocks[blocks.length - 1] || '';
-    const lines = sample.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
 
-    let readKB = 0;
+    let readKB  = 0;
     let writeKB = 0;
 
-    // Header line looks like: Device  tps  kB_read/s  kB_wrtn/s  kB_read  kB_wrtn
-    const headerLine = lines.find(l => /kB_read/i.test(l));
-    if (!headerLine) return { diskRead: 0, diskWrite: 0 };
+    // Header line looks like: Device  tps  kB_read/s  kB_wrtn/s  kB_dscd/s  kB_read  kB_wrtn
+    const headerIdx = lines.findIndex(l => /kB_read/i.test(l));
+    if (headerIdx === -1) return { diskRead: 0, diskWrite: 0 };
 
-    const headers = headerLine.split(/\s+/);
+    const headers  = lines[headerIdx].split(/\s+/);
     const readIdx  = headers.findIndex(h => /kB_read\/s/i.test(h));
     const writeIdx = headers.findIndex(h => /kB_wrtn\/s/i.test(h));
     if (readIdx === -1 || writeIdx === -1) return { diskRead: 0, diskWrite: 0 };
 
-    for (const line of lines) {
-      if (/^Device|^Linux|^\s*$/.test(line)) continue;
-      const cols = line.split(/\s+/);
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      const cols = lines[i].split(/\s+/);
       if (cols.length <= Math.max(readIdx, writeIdx)) continue;
       readKB  += parseFloat(cols[readIdx]  || '0') || 0;
       writeKB += parseFloat(cols[writeIdx] || '0') || 0;
     }
 
-    return {
-      diskRead:  readKB  / 1024,   // convert KB/s → MB/s
-      diskWrite: writeKB / 1024,
-    };
+    return { diskRead: readKB / 1024, diskWrite: writeKB / 1024 };
   } catch {
     return { diskRead: 0, diskWrite: 0 };
   }
 }
+
+/**
+ * Parse a single snapshot of /proc/net/dev.
+ * Returns a map of iface → { rx: bytes, tx: bytes }.
+ */
+function parseNetDev(raw: string): Map<string, { rx: number; tx: number }> {
+  const map = new Map<string, { rx: number; tx: number }>();
+  for (const line of raw.split('\n').map(l => l.trim())) {
+    const m = line.match(/^(\S+):\s+(\d+)(?:\s+\d+){7}\s+(\d+)/);
+    if (!m) continue;
+    const iface = m[1].replace(/:$/, '');
+    if (iface === 'lo') continue;  // skip loopback
+    map.set(iface, { rx: Number(m[2]), tx: Number(m[3]) });
+  }
+  return map;
+}
+
+/** Calculate net throughput (kB/s) between two /proc/net/dev snapshots 1 second apart. */
+function calcNetThroughput(
+  before: Map<string, { rx: number; tx: number }>,
+  after:  Map<string, { rx: number; tx: number }>,
+  elapsedMs: number
+): { netIn: number; netOut: number } {
+  let rxBytes = 0;
+  let txBytes = 0;
+  for (const [iface, afterVal] of after) {
+    const beforeVal = before.get(iface);
+    if (!beforeVal) continue;
+    rxBytes += Math.max(0, afterVal.rx - beforeVal.rx);
+    txBytes += Math.max(0, afterVal.tx - beforeVal.tx);
+  }
+  const elapsed = elapsedMs / 1000 || 1;
+  return {
+    netIn:  (rxBytes / elapsed) / 1024,   // kB/s
+    netOut: (txBytes / elapsed) / 1024,
+  };
+}
+
+export interface DockerContainer {
+  id:      string;
+  image:   string;
+  command: string;
+  created: string;
+  status:  string;
+  ports:   string;
+  cpu:     string;
+  mem:     string;
+}
+
+/** Parse `docker ps --format "table ..."` output into DockerContainer[]. */
+function parseDockerPs(raw: string): DockerContainer[] {
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  // Skip header
+  return lines.slice(1).map(line => {
+    const parts = line.split('\t');
+    return {
+      id:      parts[0]?.trim() || '',
+      image:   parts[1]?.trim() || '',
+      command: parts[2]?.trim() || '',
+      created: parts[3]?.trim() || '',
+      status:  parts[4]?.trim() || '',
+      ports:   parts[5]?.trim() || '',
+      cpu:     '—',
+      mem:     '—',
+    };
+  }).filter(c => c.id);
+}
+
+/** Parse `docker stats --no-stream --format json` output. */
+function parseDockerStats(raw: string, containers: DockerContainer[]): DockerContainer[] {
+  const statsMap = new Map<string, { cpu: string; mem: string }>();
+  for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
+    try {
+      const s = JSON.parse(line);
+      // ID in stats is the full container ID; docker ps shows short ID
+      const shortId = (s.ID || s.id || '').slice(0, 12);
+      statsMap.set(shortId, { cpu: s.CPUPerc ?? s.cpu ?? '—', mem: s.MemUsage ?? s.mem ?? '—' });
+    } catch {}
+  }
+  return containers.map(c => {
+    const st = statsMap.get(c.id) || statsMap.get(c.id.slice(0, 12));
+    return st ? { ...c, cpu: st.cpu, mem: st.mem } : c;
+  });
+}
+
 function runSSHCommand(node: any, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const conn = new Client();
@@ -200,7 +281,10 @@ interface NodeMetrics {
   cpuModel: string;
   cpuCores: number;
   publicIp: string;
+  docker:   DockerContainer[];
+  dockerStatus: string;
 }
+
 
 // --------------------------------------------------
 // Utils
@@ -405,16 +489,16 @@ const pollFailCount = new Map<string, number>();
 async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let ssh: NodeSSH | null = null;
 
-  // Explicitly declare BEFORE try/catch so catch block can always reference them.
-  // Do NOT move these inside the try block.
-  let diskRead: number  = 0;
+  // Always initialized before try so catch block can always reference them.
+  let diskRead:  number = 0;
   let diskWrite: number = 0;
-  let netIn: number     = 0;
-  let netOut: number    = 0;
+  let netIn:     number = 0;
+  let netOut:    number = 0;
 
   try {
     ssh = await connectSSH(node);
 
+    // ── Phase 1: collect static + disk I/O ───────────────────────────────
     const [
       cpuOut,
       memOut,
@@ -425,6 +509,7 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cpuCoresOut,
       logsOut,
       iostatOut,
+      netBefore,       // first /proc/net/dev snapshot
     ] = await Promise.all([
       sshExec(ssh, `LC_ALL=C top -bn1 | grep 'Cpu(s)' || top -bn1 | grep '%Cpu(s)' || echo 'Cpu(s): 0.0 us, 0.0 sy, 100.0 id'`),
       sshExec(ssh, `free -m`),
@@ -434,22 +519,60 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       sshExec(ssh, `lscpu 2>/dev/null | grep 'Model name:' | sed 's/Model name:[[:space:]]*//' || cat /proc/cpuinfo | grep 'model name' | head -n1 | cut -d: -f2 | sed 's/^ *//' || echo 'unknown'`),
       sshExec(ssh, `nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0`),
       sshExec(ssh, `tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 --no-pager 2>/dev/null || echo 'No logs available'`),
-      // iostat: 1-second sample, 2 readings; fall back gracefully if not installed
-      sshExec(ssh, `iostat -d 1 2 2>/dev/null || echo ''`),
+      // iostat -dy 1 1: -d=device only, -y=skip since-boot summary, 1s interval, 1 report
+      sshExec(ssh, `iostat -dy 1 1 2>/dev/null || echo ''`),
+      sshExec(ssh, `cat /proc/net/dev 2>/dev/null || echo ''`),
     ]);
 
+    // ── Phase 2: wait 1 second, then take second /proc/net/dev snapshot ──
+    const t0 = Date.now();
+    await new Promise(r => setTimeout(r, 1000));
+    const netAfterRaw = await sshExec(ssh, `cat /proc/net/dev 2>/dev/null || echo ''`);
+    const elapsedMs   = Date.now() - t0;
+
+    // ── Phase 3: docker ps + docker stats ────────────────────────────────
+    let dockerContainers: DockerContainer[] = [];
+    let dockerStatus = 'Not Available';
+    try {
+      const dockerPsRaw = await sshExec(
+        ssh,
+        `docker ps --format "table {{.ID}}\\t{{.Image}}\\t{{.Command}}\\t{{.CreatedAt}}\\t{{.Status}}\\t{{.Ports}}" 2>/dev/null || echo 'DOCKER_NOT_FOUND'`
+      );
+      if (!dockerPsRaw.includes('DOCKER_NOT_FOUND') && !dockerPsRaw.includes('not found') && !dockerPsRaw.includes('command not found')) {
+        dockerContainers = parseDockerPs(dockerPsRaw);
+        dockerStatus     = 'Running';
+
+        if (dockerContainers.length > 0) {
+          const statsRaw = await sshExec(
+            ssh,
+            `docker stats --no-stream --format '{"ID":"{{.ID}}","CPUPerc":"{{.CPUPerc}}","MemUsage":"{{.MemUsage}}"}' 2>/dev/null || echo ''`
+          );
+          dockerContainers = parseDockerStats(statsRaw, dockerContainers);
+        }
+      } else {
+        dockerStatus = 'Docker Not Found';
+      }
+    } catch {
+      dockerStatus = 'Docker Not Found';
+    }
+
+    // ── Parse ─────────────────────────────────────────────────────────────
     const cpu = parseCpu(cpuOut);
     const mem = parseMemory(memOut);
     const ramPercent = mem.total > 0 ? Math.round((mem.used / mem.total) * 100) : 0;
 
-    // Disk I/O via iostat (graceful zero if missing)
     const diskIO = parseIostat(iostatOut);
     diskRead  = diskIO.diskRead;
     diskWrite = diskIO.diskWrite;
 
+    const netBeforeMap = parseNetDev(netBefore);
+    const netAfterMap  = parseNetDev(netAfterRaw);
+    const net = calcNetThroughput(netBeforeMap, netAfterMap, elapsedMs);
+    netIn  = net.netIn;
+    netOut = net.netOut;
+
     const status: 'online' | 'warning' = (cpu > 85 || ramPercent > 90) ? 'warning' : 'online';
 
-    // Reset fail counter on success
     pollFailCount.set(node.id, 0);
 
     return {
@@ -475,6 +598,8 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cpuModel: cpuModelOut || 'unknown',
       cpuCores: Number(cpuCoresOut || 0),
       publicIp: node.ipAddress,
+      docker: dockerContainers,
+      dockerStatus,
     };
   } catch (err: any) {
     const message = classifySSHError(err);
@@ -502,6 +627,8 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       cpuModel: 'unknown',
       cpuCores: 0,
       publicIp: node.ipAddress,
+      docker: [],
+      dockerStatus: 'Offline',
     };
   } finally {
     try {
@@ -509,6 +636,7 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
     } catch {}
   }
 }
+
 
 // --------------------------------------------------
 // App
