@@ -150,9 +150,9 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
           {/* Hidden for interns */}
           {role !== 'intern' && (
             <>
-              <NavItem icon={Shield} label="Security" active={false} onClick={() => { }} />
-              <NavItem icon={ScrollText} label="Logs" active={false} onClick={() => { }} />
-              <NavItem icon={Settings} label="settings" active={false} onClick={() => onNavigate('settings')} />
+              {/* <NavItem icon={Shield} label="Security" active={false} onClick={() => { }} /> */}
+              {/* <NavItem icon={ScrollText} label="Logs" active={false} onClick={() => { }} /> */}
+              {/* <NavItem icon={Settings} label="settings" active={false} onClick={() => onNavigate('settings')} /> */}
             </>
           )}
         </nav>
