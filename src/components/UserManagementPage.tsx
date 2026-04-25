@@ -38,12 +38,14 @@ function AssignModal({
   token,
   isAdmin,
   onClose,
+  onSaved,
 }: {
   user: Profile;
   allNodes: NodeRecord[];
   token: string;
   isAdmin: boolean;
   onClose: () => void;
+  onSaved: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading,  setLoading]  = useState(true);
@@ -297,6 +299,7 @@ export default function UserManagementPage() {
 
   const [users,     setUsers]     = useState<Profile[]>([]);
   const [allNodes,  setAllNodes]  = useState<NodeRecord[]>([]);
+  const [assignmentCounts, setAssignmentCounts] = useState<Record<string, number>>({});
   const [search,    setSearch]    = useState('');
   const [loading,   setLoading]   = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -312,7 +315,25 @@ export default function UserManagementPage() {
       const usersRes = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
       if (usersRes.ok) {
         const data = await usersRes.json();
-        setUsers((Array.isArray(data) ? data : []).filter((u: any) => u.id !== me.id));
+        const userList = (Array.isArray(data) ? data : []).filter((u: any) => u.id !== me.id);
+
+setUsers(userList);
+
+const counts: Record<string, number> = {};
+
+await Promise.all(
+  userList.map(async (u: any) => {
+    const res = await fetch(`/api/users/${u.id}/assignments`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const assignments = res.ok ? await res.json() : [];
+    counts[u.id] = Array.isArray(assignments) ? assignments.length : 0;
+  })
+);
+
+setAssignmentCounts(counts);
+
       } else {
         const err = await usersRes.json().catch(() => ({}));
         setLoadError(err?.message || `HTTP ${usersRes.status}`);
@@ -335,7 +356,9 @@ export default function UserManagementPage() {
     }
   }, [me, token, isAdmin]);
 
+
   useEffect(() => { load(); }, [load]);
+  
 
   const handleDelete = async (userId: string) => {
     if (!window.confirm('Delete this user? This cannot be undone.')) return;
@@ -468,7 +491,9 @@ export default function UserManagementPage() {
 
               {/* Nodes */}
               <p className="text-xs text-gray-500 font-mono">
-                {allNodes.length > 0 ? `— / ${allNodes.length}` : '—'}
+                {allNodes.length > 0
+  ? `${assignmentCounts[user.id] ?? 0} / ${allNodes.length}`
+  : '—'}
               </p>
 
               {/* Actions */}
@@ -496,12 +521,13 @@ export default function UserManagementPage() {
       {/* ── Modals ────────────────────────────────────────────────────────── */}
       {assignTarget && (
         <AssignModal
-          user={assignTarget}
-          allNodes={allNodes}
-          token={token}
-          isAdmin={isAdmin}
-          onClose={() => setAssignTarget(null)}
-        />
+  user={assignTarget}
+  allNodes={allNodes}
+  token={token}
+  isAdmin={isAdmin}
+  onClose={() => setAssignTarget(null)}
+  onSaved={load}
+/>
       )}
 
       {createOpen && me && (

@@ -31,19 +31,19 @@ export default function App() {
 
   // ── Fetch nodes (with auth token) ────────────────────────────────────────
   const fetchNodes = () => {
-  if (!session?.access_token) return;
+    if (!session?.access_token) return;
 
-  fetch('/api/nodes', {
-    cache: 'no-store',
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Cache-Control': 'no-cache',
-    },
-  })
-    .then(r => r.json())
-    .then(data => setAllNodes(Array.isArray(data) ? data : []))
-    .catch(() => {});
-};
+    fetch('/api/nodes', {
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Cache-Control': 'no-cache',
+      },
+    })
+      .then(r => r.json())
+      .then(data => setAllNodes(Array.isArray(data) ? data : []))
+      .catch(() => { });
+  };
 
   useEffect(() => {
     fetchNodes();
@@ -58,6 +58,7 @@ export default function App() {
       else if (hash.startsWith('nodes/')) { setSelectedNodeId(hash.replace('nodes/', '')); setPage('node-detail'); setTerminalNodeId(null); }
       else if (hash === 'nodes') { setPage('nodes'); setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'users') { setPage('users'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'settings') { setPage('settings'); setSelectedNodeId(null); setTerminalNodeId(null); }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
     handleHash();
@@ -101,22 +102,28 @@ export default function App() {
           <ErrorBoundary>
             {page === 'dashboard' && <Dashboard />}
 
-{page === 'nodes' && (
-  <NodesPage
-    onViewDetails={(id) => navigate(`nodes/${id}`)}
-    onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
-    role={role}
-  />
-)}
+            {page === 'nodes' && (
+              <NodesPage
+                onViewDetails={(id) => navigate(`nodes/${id}`)}
+                onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
+                role={role}
+              />
+            )}
 
-{page === 'node-detail' && selectedNodeId && (
-  <NodeDetailPage
-    nodeId={selectedNodeId}
-    onBack={() => navigate('nodes')}
-    onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
-    role={role}
-  />
-)}
+            {page === 'settings' && (
+              <>
+                <h1>Settings Page</h1>
+              </>
+            )}
+
+            {page === 'node-detail' && selectedNodeId && (
+              <NodeDetailPage
+                nodeId={selectedNodeId}
+                onBack={() => navigate('nodes')}
+                onOpenTerminalPage={(id) => navigate(`terminal/${id}`)}
+                role={role}
+              />
+            )}
 
             {page === 'terminal' && terminalNodeId && (
               <TerminalPage

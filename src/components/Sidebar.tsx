@@ -38,9 +38,8 @@ function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
   return (
     <button
       onClick={onClick}
-      className={`w-full relative flex items-center gap-3 px-6 py-3 cursor-pointer group transition-all text-left ${
-        active ? 'text-neon-lime bg-neon-lime/5 border-r-2 border-neon-lime' : 'text-gray-500 hover:text-white'
-      }`}
+      className={`w-full relative flex items-center gap-3 px-6 py-3 cursor-pointer group transition-all text-left ${active ? 'text-neon-lime bg-neon-lime/5 border-r-2 border-neon-lime' : 'text-gray-500 hover:text-white'
+        }`}
     >
       <Icon size={20} className={active ? 'text-neon-lime' : 'group-hover:text-white'} />
       <span className="font-medium text-sm tracking-wide">{label}</span>
@@ -51,15 +50,15 @@ function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
 
 function NodeStatusDot({ status }: { status: NodeRecord['status'] }) {
   if (status === 'connecting') return <Loader2 size={10} className="animate-spin text-yellow-400" />;
-  if (status === 'online')     return <span className="w-2 h-2 rounded-full bg-neon-lime shadow-[0_0_6px_#D4FF00] flex-shrink-0" />;
-  if (status === 'warning')    return <span className="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_6px_rgba(234,179,8,0.8)] flex-shrink-0" />;
+  if (status === 'online') return <span className="w-2 h-2 rounded-full bg-neon-lime shadow-[0_0_6px_#D4FF00] flex-shrink-0" />;
+  if (status === 'warning') return <span className="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_6px_rgba(234,179,8,0.8)] flex-shrink-0" />;
   return <span className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)] flex-shrink-0" />;
 }
 
 export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) {
   const { signOut, session, profile } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
-  const [nodes, setNodes]         = useState<NodeRecord[] | null>(null);
+  const [nodes, setNodes] = useState<NodeRecord[] | null>(null);
 
   const fetchNodes = useCallback(async () => {
     if (!session?.access_token) return;
@@ -113,14 +112,14 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
     if (!res.ok) {
       await fetchNodes();
       let msg = `Server error (HTTP ${res.status})`;
-      try { msg = JSON.parse(text)?.message || msg; } catch {}
+      try { msg = JSON.parse(text)?.message || msg; } catch { }
       throw new Error(msg);
     }
     await fetchNodes();
   };
 
-  const safeNodes    = nodes ?? [];
-  const onlineCount  = safeNodes.filter(n => n.status === 'online').length;
+  const safeNodes = nodes ?? [];
+  const onlineCount = safeNodes.filter(n => n.status === 'online').length;
   const warningCount = safeNodes.filter(n => n.status === 'warning').length;
   const offlineCount = safeNodes.filter(n => n.status === 'offline').length;
 
@@ -136,7 +135,7 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
         {/* Nav */}
         <nav className="flex-1 space-y-0.5">
           <NavItem icon={LayoutDashboard} label="Dashboard" active={activePage === 'dashboard'} onClick={() => onNavigate('')} />
-          <NavItem icon={Database}        label="Nodes"     active={activePage === 'nodes' || activePage === 'node-detail'} onClick={() => onNavigate('nodes')} />
+          <NavItem icon={Database} label="Nodes" active={activePage === 'nodes' || activePage === 'node-detail'} onClick={() => onNavigate('nodes')} />
 
           {/* Admin: User Management tab */}
           {role === 'admin' && (
@@ -151,9 +150,9 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
           {/* Hidden for interns */}
           {role !== 'intern' && (
             <>
-              <NavItem icon={Shield}     label="Security" active={false} onClick={() => {}} />
-              <NavItem icon={ScrollText} label="Logs"     active={false} onClick={() => {}} />
-              <NavItem icon={Settings}   label="Settings" active={false} onClick={() => {}} />
+              <NavItem icon={Shield} label="Security" active={false} onClick={() => { }} />
+              <NavItem icon={ScrollText} label="Logs" active={false} onClick={() => { }} />
+              <NavItem icon={Settings} label="settings" active={false} onClick={() => onNavigate('settings')} />
             </>
           )}
         </nav>

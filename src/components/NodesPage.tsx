@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import EditNodeModal, { EditNodeFormData } from './EditNodeModal';
-import TerminalModal from './TerminalModal';
+// import TerminalModal from './TerminalModal';
 import { wsUrl } from '../utils/wsUrl';
 import { useAuth } from '../context/AuthContext';
 
@@ -159,13 +159,12 @@ const NodeCard: React.FC<NodeCardProps> = ({
             CPU Load
           </span>
           <span
-            className={`text-[11px] font-bold ${
-              cpu > 85
+            className={`text-[11px] font-bold ${cpu > 85
                 ? 'text-red-400'
                 : cpu > 65
                   ? 'text-yellow-400'
                   : 'text-neon-lime'
-            }`}
+              }`}
           >
             {isOffline ? '0%' : `${cpu.toFixed(0)}%`}
           </span>
@@ -180,13 +179,12 @@ const NodeCard: React.FC<NodeCardProps> = ({
             RAM Load
           </span>
           <span
-            className={`text-[11px] font-bold ${
-              ram > 85
+            className={`text-[11px] font-bold ${ram > 85
                 ? 'text-red-400'
                 : ram > 65
                   ? 'text-yellow-400'
                   : 'text-neon-lime'
-            }`}
+              }`}
           >
             {isOffline ? '0%' : `${ram.toFixed(0)}%`}
           </span>
@@ -276,14 +274,14 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
   const fetchNodes = useCallback(async () => {
     try {
       const res = await fetch('/api/nodes', {
-  cache: 'no-store',
-  headers: {
-    'Cache-Control': 'no-cache',
-    ...(session?.access_token
-      ? { Authorization: `Bearer ${session.access_token}` }
-      : {}),
-  },
-});
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          ...(session?.access_token
+            ? { Authorization: `Bearer ${session.access_token}` }
+            : {}),
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         setNodes(Array.isArray(data) ? data : []);
@@ -333,7 +331,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
     }
 
     return () => {
-      try { ws?.close(); } catch {}
+      try { ws?.close(); } catch { }
     };
   }, []);
 
@@ -352,7 +350,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
       let msg = `Server error (HTTP ${res.status})`;
       try {
         msg = JSON.parse(text)?.message || msg;
-      } catch {}
+      } catch { }
       throw new Error(msg);
     }
 
@@ -383,11 +381,11 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
         return { success: false, message: text.slice(0, 200) };
       }
     } catch (err: any) {
-  return {
-    success: false,
-    message: err?.message || 'Unable to reach backend server',
-  };
-}
+      return {
+        success: false,
+        message: err?.message || 'Unable to reach backend server',
+      };
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -398,7 +396,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
       let msg = `Delete failed (HTTP ${res.status})`;
       try {
         msg = JSON.parse(text)?.message || msg;
-      } catch {}
+      } catch { }
       throw new Error(msg);
     }
 
@@ -433,24 +431,24 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
 
   const safeNodes = nodes ?? [];
 
-const onlineCount  = safeNodes.filter((n) => n.status === 'online').length;
-const offlineCount = safeNodes.filter((n) => n.status === 'offline').length;
-const warningCount = safeNodes.filter((n) => n.status === 'warning').length;
+  const onlineCount = safeNodes.filter((n) => n.status === 'online').length;
+  const offlineCount = safeNodes.filter((n) => n.status === 'offline').length;
+  const warningCount = safeNodes.filter((n) => n.status === 'warning').length;
 
-const filteredNodes = safeNodes.filter((node) => {
-  const matchesSearch =
-    !search ||
-    node.displayName?.toLowerCase().includes(search.toLowerCase()) ||
-    node.ipAddress?.toLowerCase().includes(search.toLowerCase());
+  const filteredNodes = safeNodes.filter((node) => {
+    const matchesSearch =
+      !search ||
+      node.displayName?.toLowerCase().includes(search.toLowerCase()) ||
+      node.ipAddress?.toLowerCase().includes(search.toLowerCase());
 
-  const matchesFilter =
-    filter === 'ALL' ||
-    (filter === 'ONLINE' && node.status === 'online') ||
-    (filter === 'OFFLINE' && node.status === 'offline') ||
-    (filter === 'WARNING' && node.status === 'warning');
+    const matchesFilter =
+      filter === 'ALL' ||
+      (filter === 'ONLINE' && node.status === 'online') ||
+      (filter === 'OFFLINE' && node.status === 'offline') ||
+      (filter === 'WARNING' && node.status === 'warning');
 
-  return matchesSearch && matchesFilter;
-});
+    return matchesSearch && matchesFilter;
+  });
 
   // ── UI ───────────────────────────────────────────────────────────────────
 
@@ -530,11 +528,10 @@ const filteredNodes = safeNodes.filter((node) => {
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
-                  className={`rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                    filter === f
+                  className={`rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${filter === f
                       ? 'bg-neon-lime text-black'
                       : 'border border-white/10 bg-white/[0.03] text-gray-400 hover:text-white'
-                  }`}
+                    }`}
                 >
                   {f}
                 </button>
@@ -568,7 +565,7 @@ const filteredNodes = safeNodes.filter((node) => {
                   node={node}
                   metrics={metrics.get(node.id)}
                   onViewDetails={onViewDetails}
-                  onEditClick={isIntern ? () => {} : setEditTarget}
+                  onEditClick={isIntern ? () => { } : setEditTarget}
                   onOpenTerminal={handleOpenTerminal}
                   isIntern={isIntern}
                 />
@@ -585,11 +582,11 @@ const filteredNodes = safeNodes.filter((node) => {
           nodeId={editTarget.id}
           initial={{
             displayName: editTarget.displayName,
-            ipAddress:   editTarget.ipAddress,
-            username:    editTarget.username,
-            port:        String(editTarget.port),
-            region:      editTarget.region ?? 'US-East-1',
-            authType:    editTarget.authType ?? 'password',
+            ipAddress: editTarget.ipAddress,
+            username: editTarget.username,
+            port: String(editTarget.port),
+            region: editTarget.region ?? 'US-East-1',
+            authType: editTarget.authType ?? 'password',
           }}
           onClose={() => setEditTarget(null)}
           onSave={handleEditSave}
@@ -599,12 +596,12 @@ const filteredNodes = safeNodes.filter((node) => {
       )}
 
       {/* Terminal modal (fallback if no TerminalPage) */}
-      <TerminalModal
+      {/* <TerminalModal
         isOpen={!!terminalNodeId}
         nodeId={terminalNodeId}
         nodeName={terminalNodeName}
         onClose={handleCloseTerminal}
-      />
+      /> */}
     </>
   );
 }
