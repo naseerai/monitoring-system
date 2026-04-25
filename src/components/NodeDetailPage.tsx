@@ -20,14 +20,13 @@ interface LogLine {
 }
 
 export interface DockerContainer {
-  id:      string;
-  image:   string;
-  command: string;
-  created: string;
-  status:  string;
-  ports:   string;
-  cpu:     string;
-  mem:     string;
+  id:     string;
+  name:   string;
+  image:  string;
+  status: string;
+  ports:  string;
+  cpu:    string;
+  mem:    string;
 }
 
 interface NodeMetrics {
@@ -467,7 +466,7 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
             <table className="w-full text-[11px]">
               <thead>
                 <tr className="border-b border-[#1A1A1A]">
-                  {['Container ID', 'Image', 'Status', 'CPU', 'Memory', 'Ports'].map(h => (
+                  {['Container ID', 'Name', 'Image', 'Status', 'CPU %', 'Memory', 'Ports'].map(h => (
                     <th key={h} className="text-left text-[9px] font-bold uppercase tracking-[0.15em] text-gray-600 pb-2 pr-4">{h}</th>
                   ))}
                 </tr>
@@ -477,33 +476,37 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
                   const isRunning = c.status.toLowerCase().includes('up');
                   return (
                     <tr key={i} className="border-b border-[#111] hover:bg-neon-lime/[0.02] transition-colors">
-                      <td className="py-2.5 pr-4 font-mono text-gray-400">{c.id.slice(0, 12)}</td>
+                      <td className="py-2.5 pr-4 font-mono text-gray-500">{c.id.slice(0, 12)}</td>
                       <td className="py-2.5 pr-4">
-                        <span className="text-white font-semibold truncate max-w-[140px] block">{c.image}</span>
-                        <span className="text-gray-600 text-[9px] truncate max-w-[140px] block">{c.command.slice(0, 30)}</span>
+                        <span className="text-white font-semibold font-mono">{c.name || '—'}</span>
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <span className="text-gray-300 truncate max-w-[140px] block">{c.image}</span>
                       </td>
                       <td className="py-2.5 pr-4">
                         <span className={`flex items-center gap-1.5 font-bold ${
-                          isRunning ? 'text-neon-lime' : 'text-red-400'
+                          isRunning ? 'text-neon-lime' : 'text-gray-500'
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                            isRunning ? 'bg-neon-lime animate-pulse' : 'bg-red-500'
+                            isRunning ? 'bg-neon-lime animate-pulse' : 'bg-gray-600'
                           }`} />
-                          {c.status}
+                          {isRunning ? 'Up' : 'Exited'}
                         </span>
                       </td>
                       <td className="py-2.5 pr-4">
                         <span className="bg-[#0D0D0D] border border-[#222] rounded px-2 py-0.5 font-mono text-[10px] text-white">
-                          {c.cpu}
+                          {c.cpu !== '-' ? c.cpu : '—'}
                         </span>
                       </td>
                       <td className="py-2.5 pr-4">
                         <span className="bg-[#0D0D0D] border border-[#222] rounded px-2 py-0.5 font-mono text-[10px] text-white">
-                          {c.mem}
+                          {c.mem !== '-' ? c.mem : '—'}
                         </span>
                       </td>
                       <td className="py-2.5">
-                        <span className="text-gray-500 font-mono text-[9px] truncate max-w-[120px] block">{c.ports || '—'}</span>
+                        <span className="text-gray-500 font-mono text-[9px] truncate max-w-[120px] block">
+                          {c.ports && c.ports !== '-' ? c.ports : '—'}
+                        </span>
                       </td>
                     </tr>
                   );

@@ -5,7 +5,7 @@ import { NodeSSH } from 'node-ssh';
 import { Client } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
+// randomUUID no longer needed — Supabase uses gen_random_uuid() for node IDs
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
@@ -24,26 +24,33 @@ const supabaseAdmin = createClient(
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const NODES_FILE = path.join(__dirname, 'nodes.json');
+// nodes.json removed — Supabase is the single source of truth
 
 // --------------------------------------------------
 // Types
 // --------------------------------------------------
 
 /**
- * Parse `iostat -dy 1 1` output.
- * The -y flag skips the since-boot summary so only the 1-second sample is shown.
+ * Parse `iostat -d 1 2` output.
+ * Takes the LAST sample block (the 1-second interval, not the since-boot summary).
  * Sums kB_read/s + kB_wrtn/s across all devices and converts to MB/s.
  * Returns {0,0} on any parse/missing-tool failure.
  */
 function parseIostat(raw: string): { diskRead: number; diskWrite: number } {
   try {
-    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!raw || !raw.trim()) return { diskRead: 0, diskWrite: 0 };
+
+    // Split by blank lines to get report blocks
+    const blocks = raw.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
+
+    // Use the LAST block (the 1-second sample, not since-boot)
+    const lastBlock = blocks[blocks.length - 1] ?? '';
+    const lines = lastBlock.split('\n').map(l => l.trim()).filter(Boolean);
 
     let readKB  = 0;
     let writeKB = 0;
 
-    // Header line looks like: Device  tps  kB_read/s  kB_wrtn/s  kB_dscd/s  kB_read  kB_wrtn
+    // Header line: Device  tps  kB_read/s  kB_wrtn/s ...
     const headerIdx = lines.findIndex(l => /kB_read/i.test(l));
     if (headerIdx === -1) return { diskRead: 0, diskWrite: 0 };
 
@@ -103,51 +110,51 @@ function calcNetThroughput(
 }
 
 export interface DockerContainer {
-  id:      string;
-  image:   string;
-  command: string;
-  created: string;
-  status:  string;
-  ports:   string;
-  cpu:     string;
-  mem:     string;
+  id:     string;
+  name:   string;
+  image:  string;
+  status: string;
+  ports:  string;
+  cpu:    string;
+  mem:    string;
 }
 
-/** Parse `docker ps --format "table ..."` output into DockerContainer[]. */
-function parseDockerPs(raw: string): DockerContainer[] {
-  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length < 2) return [];
-  // Skip header
-  return lines.slice(1).map(line => {
-    const parts = line.split('\t');
-    return {
-      id:      parts[0]?.trim() || '',
-      image:   parts[1]?.trim() || '',
-      command: parts[2]?.trim() || '',
-      created: parts[3]?.trim() || '',
-      status:  parts[4]?.trim() || '',
-      ports:   parts[5]?.trim() || '',
-      cpu:     '—',
-      mem:     '—',
-    };
-  }).filter(c => c.id);
-}
-
-/** Parse `docker stats --no-stream --format json` output. */
-function parseDockerStats(raw: string, containers: DockerContainer[]): DockerContainer[] {
-  const statsMap = new Map<string, { cpu: string; mem: string }>();
+/**
+ * Parse `docker ps --all --format "{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"`
+ * Returns a map keyed by short container ID (12 chars).
+ */
+function parseDockerPsPipe(raw: string): Map<string, DockerContainer> {
+  const map = new Map<string, DockerContainer>();
   for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
-    try {
-      const s = JSON.parse(line);
-      // ID in stats is the full container ID; docker ps shows short ID
-      const shortId = (s.ID || s.id || '').slice(0, 12);
-      statsMap.set(shortId, { cpu: s.CPUPerc ?? s.cpu ?? '—', mem: s.MemUsage ?? s.mem ?? '—' });
-    } catch {}
+    const parts = line.split('|');
+    if (parts.length < 4) continue;
+    const id     = (parts[0] ?? '').trim().slice(0, 12);
+    const name   = (parts[1] ?? '').trim() || '-';
+    const image  = (parts[2] ?? '').trim() || '-';
+    const status = (parts[3] ?? '').trim() || '-';
+    const ports  = (parts[4] ?? '').trim() || '-';
+    if (!id) continue;
+    map.set(id, { id, name, image, status, ports, cpu: '-', mem: '-' });
   }
-  return containers.map(c => {
-    const st = statsMap.get(c.id) || statsMap.get(c.id.slice(0, 12));
-    return st ? { ...c, cpu: st.cpu, mem: st.mem } : c;
-  });
+  return map;
+}
+
+/**
+ * Parse `docker stats --no-stream --format "{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}"`
+ * Merges cpu/mem into the ps map by short ID.
+ */
+function mergeDockerStats(raw: string, psMap: Map<string, DockerContainer>): DockerContainer[] {
+  for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
+    const parts = line.split('|');
+    if (parts.length < 3) continue;
+    const id  = (parts[0] ?? '').trim().slice(0, 12);
+    const cpu = (parts[1] ?? '').trim() || '-';
+    const mem = (parts[2] ?? '').trim() || '-';
+    if (!id) continue;
+    const entry = psMap.get(id);
+    if (entry) { entry.cpu = cpu; entry.mem = mem; }
+  }
+  return Array.from(psMap.values());
 }
 
 function runSSHCommand(node: any, command: string): Promise<string> {
@@ -304,19 +311,31 @@ function safePort(v: unknown, fallback = 22) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function readNodes(): NodeRecord[] {
-  try {
-    if (!fs.existsSync(NODES_FILE)) return [];
-    const raw = fs.readFileSync(NODES_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
+/** Fetch all nodes from Supabase (includes credential for SSH use). */
+async function readNodesFromSupabase(): Promise<NodeRecord[]> {
+  const { data, error } = await supabaseAdmin
+    .from('nodes')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('[DB] Failed to read nodes:', error.message);
     return [];
   }
-}
-
-function writeNodes(nodes: NodeRecord[]) {
-  fs.writeFileSync(NODES_FILE, JSON.stringify(nodes, null, 2), 'utf8');
+  return (data ?? []).map((row: any) => ({
+    id:           row.id,
+    displayName:  row.display_name,
+    ipAddress:    row.ip_address,
+    username:     row.username,
+    port:         row.port ?? 22,
+    authType:     row.auth_type as 'password' | 'privateKey',
+    credential:   row.credential,
+    region:       row.region ?? 'US-East-1',
+    status:       row.status ?? 'connecting',
+    createdAt:    row.created_at,
+    updatedAt:    row.updated_at,
+    uptimeOutput: row.uptime_output ?? undefined,
+    error:        row.error ?? undefined,
+  }));
 }
 
 function sanitizePrivateKey(input: string) {
@@ -519,8 +538,8 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
       sshExec(ssh, `lscpu 2>/dev/null | grep 'Model name:' | sed 's/Model name:[[:space:]]*//' || cat /proc/cpuinfo | grep 'model name' | head -n1 | cut -d: -f2 | sed 's/^ *//' || echo 'unknown'`),
       sshExec(ssh, `nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0`),
       sshExec(ssh, `tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 --no-pager 2>/dev/null || echo 'No logs available'`),
-      // iostat -dy 1 1: -d=device only, -y=skip since-boot summary, 1s interval, 1 report
-      sshExec(ssh, `iostat -dy 1 1 2>/dev/null || echo ''`),
+      // iostat -d 1 2: 2 samples with 1s interval; we parse the LAST block (real delta)
+      sshExec(ssh, `iostat -d 1 2 2>/dev/null || echo ''`),
       sshExec(ssh, `cat /proc/net/dev 2>/dev/null || echo ''`),
     ]);
 
@@ -530,24 +549,27 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
     const netAfterRaw = await sshExec(ssh, `cat /proc/net/dev 2>/dev/null || echo ''`);
     const elapsedMs   = Date.now() - t0;
 
-    // ── Phase 3: docker ps + docker stats ────────────────────────────────
+    // ── Phase 3: docker ps + docker stats (pipe-delimited) ───────────────
     let dockerContainers: DockerContainer[] = [];
     let dockerStatus = 'Not Available';
     try {
       const dockerPsRaw = await sshExec(
         ssh,
-        `docker ps --format "table {{.ID}}\\t{{.Image}}\\t{{.Command}}\\t{{.CreatedAt}}\\t{{.Status}}\\t{{.Ports}}" 2>/dev/null || echo 'DOCKER_NOT_FOUND'`
-      );
-      if (!dockerPsRaw.includes('DOCKER_NOT_FOUND') && !dockerPsRaw.includes('not found') && !dockerPsRaw.includes('command not found')) {
-        dockerContainers = parseDockerPs(dockerPsRaw);
-        dockerStatus     = 'Running';
+        `docker ps --all --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`
+      ).catch(() => 'DOCKER_NOT_FOUND');
 
-        if (dockerContainers.length > 0) {
+      if (!dockerPsRaw.includes('DOCKER_NOT_FOUND') && !dockerPsRaw.includes('command not found') && !dockerPsRaw.includes('not found')) {
+        const psMap = parseDockerPsPipe(dockerPsRaw);
+        dockerStatus = 'Running';
+
+        if (psMap.size > 0) {
           const statsRaw = await sshExec(
             ssh,
-            `docker stats --no-stream --format '{"ID":"{{.ID}}","CPUPerc":"{{.CPUPerc}}","MemUsage":"{{.MemUsage}}"}' 2>/dev/null || echo ''`
-          );
-          dockerContainers = parseDockerStats(statsRaw, dockerContainers);
+            `docker stats --no-stream --format '{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}' 2>/dev/null || echo ''`
+          ).catch(() => '');
+          dockerContainers = mergeDockerStats(statsRaw, psMap);
+        } else {
+          dockerContainers = Array.from(psMap.values());
         }
       } else {
         dockerStatus = 'Docker Not Found';
@@ -716,8 +738,15 @@ app.use((req, _res, next) => {
 app.post('/api/nodes/:id/reboot', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const { id } = req.params;
-    const node = readNodes().find(n => n.id === id);
-    if (!node) return res.status(404).json({ message: 'Node not found' });
+    const { data: nodeRow, error: nodeErr } = await supabaseAdmin
+      .from('nodes').select('*').eq('id', id).single();
+    if (nodeErr || !nodeRow) return res.status(404).json({ message: 'Node not found' });
+    const node: NodeRecord = {
+      id: nodeRow.id, displayName: nodeRow.display_name, ipAddress: nodeRow.ip_address,
+      username: nodeRow.username, port: nodeRow.port, authType: nodeRow.auth_type,
+      credential: nodeRow.credential, region: nodeRow.region, status: nodeRow.status,
+      createdAt: nodeRow.created_at, updatedAt: nodeRow.updated_at,
+    };
 
     await runSSHCommand(node, 'nohup sudo reboot >/dev/null 2>&1 &');
     return res.json({ success: true, message: 'Reboot command sent' });
@@ -788,12 +817,9 @@ app.post('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee')
       return res.status(400).json({ message: 'nodeIds must be an array' });
     }
 
-    // ── Validate nodeIds against the local nodes.json file ────────────────
-    // node_assignments.node_id has a FK to public.nodes(id) in Supabase.
-    // Our nodes live in the local JSON — after running migration 003 the FK
-    // is dropped, but we still filter to prevent garbage IDs from being saved.
-    const knownNodes  = readNodes();
-    const knownIds    = new Set(knownNodes.map(n => n.id));
+    // ── Validate nodeIds against Supabase nodes table ────────────────────
+    const { data: knownNodesData } = await supabaseAdmin.from('nodes').select('id');
+    const knownIds    = new Set((knownNodesData ?? []).map((n: any) => n.id));
     const validIds    = nodeIds.filter(id => knownIds.has(id));
     const rejectedIds = nodeIds.filter(id => !knownIds.has(id));
 
@@ -877,27 +903,66 @@ app.delete('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee
 
 
 app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
-  const allNodes = readNodes().map(({ credential, ...rest }) => rest);
+  try {
+    if (req.userRole === 'admin') {
+      // Admins see all nodes
+      const { data, error } = await supabaseAdmin
+        .from('nodes')
+        .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
+        .order('created_at', { ascending: false });
+      if (error) return res.status(500).json({ message: error.message });
+      return res.json((data ?? []).map((row: any) => ({
+        id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
+        username: row.username, port: row.port, authType: row.auth_type,
+        region: row.region, status: row.status, uptimeOutput: row.uptime_output,
+        error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
+      })));
+    }
 
-  // Admins see everything
-  if (req.userRole === 'admin') return res.json(allNodes);
+    // Employees/Interns: only nodes assigned to them
+    const { data: assignments } = await supabaseAdmin
+      .from('node_assignments')
+      .select('node_id')
+      .eq('user_id', req.userId!);
+    const assignedIds = (assignments ?? []).map((a: any) => a.node_id);
 
-  // Employees / Interns: only nodes assigned to them
-  const { data: assignments } = await supabaseAdmin
-    .from('node_assignments')
-    .select('node_id')
-    .eq('user_id', req.userId!);
+    if (assignedIds.length === 0) return res.json([]);
 
-  const assignedIds = new Set((assignments ?? []).map((a: any) => a.node_id));
-  return res.json(allNodes.filter(n => assignedIds.has(n.id)));
+    const { data, error } = await supabaseAdmin
+      .from('nodes')
+      .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
+      .in('id', assignedIds)
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ message: error.message });
+    return res.json((data ?? []).map((row: any) => ({
+      id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
+      username: row.username, port: row.port, authType: row.auth_type,
+      region: row.region, status: row.status, uptimeOutput: row.uptime_output,
+      error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
+    })));
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
 });
 
-app.get('/api/nodes/:id', (req, res) => {
-  const node = readNodes().find(n => n.id === req.params.id);
-  if (!node) return res.status(404).json({ message: 'Node not found' });
-
-  const { credential, ...safe } = node;
-  res.json(safe);
+app.get('/api/nodes/:id', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('nodes')
+      .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
+      .eq('id', req.params.id)
+      .single();
+    if (error || !data) return res.status(404).json({ message: 'Node not found' });
+    const row = data as any;
+    return res.json({
+      id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
+      username: row.username, port: row.port, authType: row.auth_type,
+      region: row.region, status: row.status, uptimeOutput: row.uptime_output,
+      error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
 });
 
 app.post('/api/nodes/test', async (req, res) => {
@@ -934,105 +999,138 @@ app.post('/api/nodes/test', async (req, res) => {
 
 app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
-    const node: NodeRecord = {
-      id: randomUUID(),
-      displayName: safeStr(req.body?.displayName),
-      ipAddress: safeStr(req.body?.ipAddress),
-      username: safeStr(req.body?.username),
-      port: safePort(req.body?.port, 22),
-      authType: (safeStr(req.body?.authType) || 'password') as 'password' | 'privateKey',
-      credential: String(req.body?.credential ?? ''),
-      region: safeStr(req.body?.region) || 'US-East-1',
-      status: 'connecting',
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
+    const displayName = safeStr(req.body?.displayName);
+    const ipAddress   = safeStr(req.body?.ipAddress);
+    const username    = safeStr(req.body?.username);
+    const credential  = String(req.body?.credential ?? '');
+    const port        = safePort(req.body?.port, 22);
+    const authType    = (safeStr(req.body?.authType) || 'password') as 'password' | 'privateKey';
+    const region      = safeStr(req.body?.region) || 'US-East-1';
 
-    if (!node.displayName || !node.ipAddress || !node.username || !node.credential) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing displayName, ipAddress, username, or credential.',
-      });
+    if (!displayName || !ipAddress || !username || !credential) {
+      return res.status(400).json({ success: false, message: 'Missing displayName, ipAddress, username, or credential.' });
     }
 
-    const nodes = readNodes();
-    nodes.unshift(node);
-    writeNodes(nodes);
+    // INSERT into Supabase
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from('nodes')
+      .insert({
+        display_name: displayName,
+        ip_address:   ipAddress,
+        username,
+        port,
+        auth_type:    authType,
+        credential,
+        region,
+        status:       'connecting',
+        created_by:   req.userId,
+      })
+      .select('id, display_name, ip_address, username, port, auth_type, region, status, created_at, updated_at')
+      .single();
 
-    const { credential, ...safe } = node;
+    if (insertErr || !inserted) {
+      return res.status(500).json({ success: false, message: insertErr?.message || 'Failed to create node' });
+    }
+
+    const row = inserted as any;
+    const nodeId = row.id as string;
+
+    // Auto-assign to the creator
+    void (async () => {
+      try {
+        await supabaseAdmin
+          .from('node_assignments')
+          .upsert({ user_id: req.userId!, node_id: nodeId, created_by: req.userId }, { onConflict: 'user_id,node_id' });
+        console.log(`[NODE] Auto-assigned node ${nodeId} → creator ${req.userId}`);
+      } catch (e: any) {
+        console.warn('[NODE] Auto-assign failed:', e?.message);
+      }
+    })();
+
+    const safe = {
+      id: nodeId, displayName: row.display_name, ipAddress: row.ip_address,
+      username: row.username, port: row.port, authType: row.auth_type,
+      region: row.region, status: row.status,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
     res.status(201).json(safe);
 
-    void testSSH(node).then((result) => {
-      const all = readNodes();
-      const idx = all.findIndex(n => n.id === node.id);
-      if (idx !== -1) {
-        all[idx].status = result.success ? 'online' : 'offline';
-        all[idx].updatedAt = nowIso();
-        all[idx].uptimeOutput = result.uptimeOutput;
-        all[idx].error = result.success ? undefined : result.message;
-        writeNodes(all);
-        console.log(`[BG-SSH] '${all[idx].displayName}' → ${all[idx].status}${result.success ? '' : ` | ${result.message}`}`);
-      }
+    // Background SSH test → update Supabase
+    const nodeForSSH: NodeRecord = { ...safe, credential, status: 'connecting', updatedAt: nowIso(), createdAt: nowIso() };
+    void testSSH(nodeForSSH).then(async (result) => {
+      try {
+        await supabaseAdmin.from('nodes').update({
+          status:        result.success ? 'online' : 'offline',
+          uptime_output: result.uptimeOutput ?? null,
+          error:         result.success ? null : result.message,
+          updated_at:    nowIso(),
+        }).eq('id', nodeId);
+        console.log(`[BG-SSH] '${displayName}' → ${result.success ? 'online' : 'offline'}${result.success ? '' : ` | ${result.message}`}`);
+      } catch {}
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
-app.put('/api/nodes/:id', async (req, res) => {
+app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
-    const nodes = readNodes();
-    const idx = nodes.findIndex(n => n.id === req.params.id);
+    const nodeId = req.params.id;
 
-    if (idx === -1) return res.status(404).json({ message: 'Node not found' });
+    // Fetch existing to get current credential if not replaced
+    const { data: existing, error: fetchErr } = await supabaseAdmin
+      .from('nodes').select('*').eq('id', nodeId).single();
+    if (fetchErr || !existing) return res.status(404).json({ message: 'Node not found' });
 
-    const old = nodes[idx];
-    const updated: NodeRecord = {
-      ...old,
-      displayName: safeStr(req.body?.displayName ?? old.displayName),
-      ipAddress: safeStr(req.body?.ipAddress ?? old.ipAddress),
-      username: safeStr(req.body?.username ?? old.username),
-      port: safePort(req.body?.port ?? old.port, 22),
-      authType: (safeStr(req.body?.authType ?? old.authType) || 'password') as 'password' | 'privateKey',
-      credential: req.body?.credential ? String(req.body.credential) : old.credential,
-      region: safeStr(req.body?.region ?? old.region),
-      status: 'connecting',
-      updatedAt: nowIso(),
+    const old = existing as any;
+    const updates: any = {
+      display_name: safeStr(req.body?.displayName  ?? old.display_name),
+      ip_address:   safeStr(req.body?.ipAddress    ?? old.ip_address),
+      username:     safeStr(req.body?.username     ?? old.username),
+      port:         safePort(req.body?.port        ?? old.port, 22),
+      auth_type:    safeStr(req.body?.authType     ?? old.auth_type) || 'password',
+      region:       safeStr(req.body?.region       ?? old.region),
+      status:       'connecting',
+      updated_at:   nowIso(),
     };
+    if (req.body?.credential) updates.credential = String(req.body.credential);
 
-    nodes[idx] = updated;
-    writeNodes(nodes);
+    const { error: updErr } = await supabaseAdmin.from('nodes').update(updates).eq('id', nodeId);
+    if (updErr) return res.status(500).json({ message: updErr.message });
 
-    const { credential, ...safe } = updated;
-    res.json(safe);
+    res.json({ id: nodeId, ...updates, displayName: updates.display_name, ipAddress: updates.ip_address, authType: updates.auth_type });
 
-    void testSSH(updated).then((result) => {
-      const all = readNodes();
-      const i = all.findIndex(n => n.id === updated.id);
-      if (i !== -1) {
-        all[i].status = result.success ? 'online' : 'offline';
-        all[i].updatedAt = nowIso();
-        all[i].uptimeOutput = result.uptimeOutput;
-        all[i].error = result.success ? undefined : result.message;
-        writeNodes(all);
-        console.log(`[BG-SSH] Updated '${all[i].displayName}' → ${all[i].status}${result.success ? '' : ` | ${result.message}`}`);
-      }
+    // Background SSH re-test
+    const nodeForSSH: NodeRecord = {
+      id: nodeId, displayName: updates.display_name, ipAddress: updates.ip_address,
+      username: updates.username, port: updates.port, authType: updates.auth_type,
+      credential: updates.credential ?? old.credential, region: updates.region,
+      status: 'connecting', createdAt: old.created_at, updatedAt: nowIso(),
+    };
+    void testSSH(nodeForSSH).then(async result => {
+      try {
+        await supabaseAdmin.from('nodes').update({
+          status:        result.success ? 'online' : 'offline',
+          uptime_output: result.uptimeOutput ?? null,
+          error:         result.success ? null : result.message,
+          updated_at:    nowIso(),
+        }).eq('id', nodeId);
+        console.log(`[BG-SSH] Updated '${updates.display_name}' → ${result.success ? 'online' : 'offline'}`);
+      } catch {}
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
-app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), (req, res) => {
-  const nodes = readNodes();
-  const filtered = nodes.filter(n => n.id !== req.params.id);
-
-  if (filtered.length === nodes.length) {
-    return res.status(404).json({ message: 'Node not found' });
+app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('nodes').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ message: error.message });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
-
-  writeNodes(filtered);
-  res.json({ success: true });
 });
 
 // --------------------------------------------------
@@ -1268,7 +1366,7 @@ function broadcastMetrics(data: object) {
 // Terminal WebSocket
 // --------------------------------------------------
 
-terminalWss.on('connection', (ws, req) => {
+terminalWss.on('connection', async (ws, req) => {
   const url = new URL(req.url || '', 'http://localhost');
   const nodeId = url.searchParams.get('nodeId');
 
@@ -1278,12 +1376,19 @@ terminalWss.on('connection', (ws, req) => {
     return;
   }
 
-  const node = readNodes().find(n => n.id === nodeId);
-  if (!node) {
+  const { data: nodeRow } = await supabaseAdmin
+    .from('nodes').select('*').eq('id', nodeId).single();
+  if (!nodeRow) {
     ws.send('\r\n[terminal] Node not found\r\n');
     ws.close();
     return;
   }
+  const node: NodeRecord = {
+    id: nodeRow.id, displayName: nodeRow.display_name, ipAddress: nodeRow.ip_address,
+    username: nodeRow.username, port: nodeRow.port, authType: nodeRow.auth_type,
+    credential: nodeRow.credential, region: nodeRow.region, status: nodeRow.status,
+    createdAt: nodeRow.created_at, updatedAt: nodeRow.updated_at,
+  };
 
   const conn = new Client();
   let streamRef: any = null;
@@ -1414,38 +1519,23 @@ async function pollNode(node: NodeRecord) {
     const metrics = await collectMetrics(node);
     broadcastMetrics(metrics);
 
-    // --- Update local JSON store ---
-    const all = readNodes();
-    const idx = all.findIndex(n => n.id === node.id);
-    if (idx !== -1) {
-      all[idx].status     = metrics.status;
-      all[idx].updatedAt  = metrics.timestamp;
-      all[idx].uptimeOutput = metrics.uptime;
-      all[idx].error      = metrics.status === 'offline' ? metrics.logs[0]?.message : undefined;
-      writeNodes(all);
-    }
-
-    // --- Update Supabase (non-blocking) ---
+    // --- Update Supabase (primary store) ---
     if (metrics.status === 'offline') {
       const fails = (pollFailCount.get(node.id) ?? 0) + 1;
       pollFailCount.set(node.id, fails);
 
       if (fails >= 3) {
-        supabaseAdmin
+        void supabaseAdmin
           .from('nodes')
           .update({ status: 'offline', updated_at: metrics.timestamp, error: metrics.logs[0]?.message })
-          .eq('id', node.id)
-          .then(() => {})
-          .catch(() => {});
+          .eq('id', node.id);
       }
     } else {
       pollFailCount.set(node.id, 0);
-      supabaseAdmin
+      void supabaseAdmin
         .from('nodes')
         .update({ status: metrics.status, updated_at: metrics.timestamp, error: null })
-        .eq('id', node.id)
-        .then(() => {})
-        .catch(() => {});
+        .eq('id', node.id);
     }
 
     console.log(
@@ -1460,8 +1550,8 @@ async function pollNode(node: NodeRecord) {
   }
 }
 
-function pollAllNodes() {
-  const nodes = readNodes();
+async function pollAllNodes() {
+  const nodes = await readNodesFromSupabase();
   if (!nodes.length) return;
 
   console.log(`[POLL] Starting poll cycle — ${nodes.length} node(s)`);
