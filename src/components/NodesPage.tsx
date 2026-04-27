@@ -454,7 +454,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
 
   return (
     <>
-      <div className="min-h-screen bg-[#050505] text-white">
+      <div className="min-h-screen overflow-y-auto bg-[#050505] text-white">
         {/* Top Bar */}
         <div className="sticky top-0 z-20 border-b border-white/5 bg-black/60 backdrop-blur-xl">
           <div className="flex items-center justify-between px-6 py-4">
