@@ -464,13 +464,13 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
             </div>
 
             <div className="flex items-center gap-2">
-              <button
+              {/* <button
                 onClick={fetchNodes}
                 className="rounded-xl border border-white/10 bg-white/5 p-2 text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
                 title="Refresh"
               >
                 <RefreshCw size={16} />
-              </button>
+              </button> */}
 
               <button
                 className="rounded-xl border border-white/10 bg-white/5 p-2 text-gray-300 transition-colors hover:bg-white/10 hover:text-white"

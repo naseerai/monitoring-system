@@ -7,9 +7,10 @@ import NodesPage from './components/NodesPage';
 import NodeDetailPage from './components/NodeDetailPage';
 import TerminalPage from './components/TerminalPage';
 import UserManagementPage from './components/UserManagementPage';
+import UserProfilePage from './components/UserProfilePage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users';
+type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings';
 
 interface NodeRecord {
   id: string;
@@ -56,8 +57,9 @@ export default function App() {
       const hash = window.location.hash.replace('#', '');
       if (hash.startsWith('terminal/')) { setTerminalNodeId(hash.replace('terminal/', '')); setPage('terminal'); }
       else if (hash.startsWith('nodes/')) { setSelectedNodeId(hash.replace('nodes/', '')); setPage('node-detail'); setTerminalNodeId(null); }
-      else if (hash === 'nodes') { setPage('nodes'); setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'users') { setPage('users'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'nodes')   { setPage('nodes');   setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'users')   { setPage('users');   setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'profile') { setPage('profile'); setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'settings') { setPage('settings'); setSelectedNodeId(null); setTerminalNodeId(null); }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
@@ -94,8 +96,8 @@ export default function App() {
         <main className="flex-1 flex flex-col bg-neon-dark relative overflow-hidden">
           {page !== 'terminal' && (
             <>
-              <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-neon-lime/10 blur-[150px] -z-10 rounded-full" />
-              <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-neon-lime/5 blur-[100px] -z-10 rounded-full" />
+              <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[#DFFF00]/10 blur-[150px] -z-10 rounded-full" />
+              <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-[#DFFF00]/5 blur-[100px] -z-10 rounded-full" />
             </>
           )}
 
@@ -136,6 +138,10 @@ export default function App() {
 
             {page === 'users' && (role === 'admin' || role === 'employee') && (
               <UserManagementPage />
+            )}
+
+            {page === 'profile' && (
+              <UserProfilePage onNavigate={navigate} />
             )}
           </ErrorBoundary>
         </main>
