@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './context/AuthContext';
 import LoginPage from './components/LoginPage';
+import LandingPage from './components/LandingPage';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import NodesPage from './components/NodesPage';
@@ -29,6 +30,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [terminalNodeId, setTerminalNodeId] = useState<string | null>(null);
   const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
+  const [showLogin, setShowLogin] = useState(false);
 
   // ── Fetch nodes (with auth token) ────────────────────────────────────────
   const fetchNodes = () => {
@@ -80,7 +82,10 @@ export default function App() {
   }
 
   // ── Auth gate ─────────────────────────────────────────────────────────────
-  if (!session) return <LoginPage />;
+  if (!session) {
+    if (showLogin) return <LoginPage />;
+    return <LandingPage onNavigateToLogin={() => setShowLogin(true)} />;
+  }
 
   const role = profile?.role ?? 'intern';
 
