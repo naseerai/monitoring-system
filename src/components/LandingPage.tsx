@@ -582,7 +582,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
         <div className="footer-inner" style={{ maxWidth: 1100, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Shield size={14} color="#DFFF00" />
-            <span style={{ fontSize: 13, color: '#555', fontWeight: 600, letterSpacing: '0.06em' }}>NEON SENTRY © 2024</span>
+            <span style={{ fontSize: 13, color: '#555', fontWeight: 600, letterSpacing: '0.06em' }}>MYACCESS © 2026</span>
           </div>
           <div className="footer-links" style={{ display: 'flex', gap: 24 }}>
             {['Terms', 'Privacy', 'System Status'].map(link => (

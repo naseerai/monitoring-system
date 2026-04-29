@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Shield, Eye, EyeOff, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
