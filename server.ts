@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
-import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.js';
+import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto';
 
 // --------------------------------------------------
 // Input Sanitization Helpers
