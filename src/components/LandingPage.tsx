@@ -270,12 +270,12 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
 
           {/* Right actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <button onClick={onNavigateToLogin}
+            {/* <button onClick={onNavigateToLogin}
               style={{ background: 'none', border: 'none', color: '#aaa', fontSize: 14, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', transition: 'color 0.2s' }}
               onMouseEnter={e => (e.currentTarget.style.color = '#DFFF00')}
               onMouseLeave={e => (e.currentTarget.style.color = '#aaa')}>
               Operator Login
-            </button>
+            </button> */}
             <button className="btn-primary" onClick={onNavigateToLogin} style={{ padding: '8px 20px', fontSize: 13 }}>
               Get Started
             </button>

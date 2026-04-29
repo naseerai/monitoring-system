@@ -5,10 +5,41 @@ import { NodeSSH } from 'node-ssh';
 import { Client } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
-// randomUUID no longer needed — Supabase uses gen_random_uuid() for node IDs
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
+import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.js';
+
+// --------------------------------------------------
+// Input Sanitization Helpers
+// --------------------------------------------------
+
+/** Allowed characters for node display names: alphanumeric, spaces, hyphens, dots, underscores */
+const SAFE_NAME_RE = /^[a-zA-Z0-9 ._\-]{1,64}$/;
+
+/** IPv4, IPv6, or hostname — no shell metacharacters */
+const SAFE_IP_RE = /^[a-zA-Z0-9.:\-]{1,253}$/;
+
+/** Shell injection characters that must never appear in any free-text field used in SSH commands */
+const SHELL_INJECTION_RE = /[;&|`$(){}<!>\\]/;
+
+function assertSafeName(value: string, fieldName = 'displayName'): void {
+  if (!SAFE_NAME_RE.test(value)) {
+    throw new Error(`Invalid ${fieldName}: only alphanumeric characters, spaces, hyphens, dots, and underscores are allowed (max 64 chars).`);
+  }
+}
+
+function assertSafeIp(value: string): void {
+  if (!SAFE_IP_RE.test(value)) {
+    throw new Error('Invalid ipAddress: contains disallowed characters.');
+  }
+}
+
+function assertNoShellChars(value: string, fieldName: string): void {
+  if (SHELL_INJECTION_RE.test(value)) {
+    throw new Error(`Invalid ${fieldName}: shell metacharacters are not permitted.`);
+  }
+}
 
 // --------------------------------------------------
 // Supabase admin client (service role — backend only)
@@ -328,7 +359,8 @@ async function readNodesFromSupabase(): Promise<NodeRecord[]> {
     username:     row.username,
     port:         row.port ?? 22,
     authType:     row.auth_type as 'password' | 'privateKey',
-    credential:   row.credential,
+    // Decrypt credential in backend memory — never sent to frontend
+    credential:   (() => { try { return decryptCredential(row.credential); } catch { return row.credential; } })(),
     region:       row.region ?? 'US-East-1',
     status:       row.status ?? 'connecting',
     createdAt:    row.created_at,
@@ -1010,6 +1042,18 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req
     if (!displayName || !ipAddress || !username || !credential) {
       return res.status(400).json({ success: false, message: 'Missing displayName, ipAddress, username, or credential.' });
     }
+    // ── Input sanitization ────────────────────────────────────────────────
+    try {
+      assertSafeName(displayName, 'displayName');
+      assertSafeIp(ipAddress);
+      assertNoShellChars(username, 'username');
+      assertNoShellChars(region, 'region');
+    } catch (ve: any) {
+      return res.status(400).json({ success: false, message: ve.message });
+    }
+
+    // Encrypt credential before persisting
+    const encryptedCredential = isEncrypted(credential) ? credential : encryptCredential(credential);
 
     // INSERT into Supabase
     const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -1020,7 +1064,7 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req
         username,
         port,
         auth_type:    authType,
-        credential,
+        credential:   encryptedCredential,
         region,
         status:       'connecting',
         created_by:   req.userId,
@@ -1083,17 +1127,33 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
     if (fetchErr || !existing) return res.status(404).json({ message: 'Node not found' });
 
     const old = existing as any;
+    const newDisplayName = safeStr(req.body?.displayName ?? old.display_name);
+    const newIp          = safeStr(req.body?.ipAddress   ?? old.ip_address);
+    const newUsername    = safeStr(req.body?.username    ?? old.username);
+    const newRegion      = safeStr(req.body?.region      ?? old.region);
+    // Input sanitization on PUT
+    try {
+      assertSafeName(newDisplayName, 'displayName');
+      assertSafeIp(newIp);
+      assertNoShellChars(newUsername, 'username');
+      assertNoShellChars(newRegion, 'region');
+    } catch (ve: any) {
+      return res.status(400).json({ success: false, message: ve.message });
+    }
     const updates: any = {
-      display_name: safeStr(req.body?.displayName  ?? old.display_name),
-      ip_address:   safeStr(req.body?.ipAddress    ?? old.ip_address),
-      username:     safeStr(req.body?.username     ?? old.username),
-      port:         safePort(req.body?.port        ?? old.port, 22),
-      auth_type:    safeStr(req.body?.authType     ?? old.auth_type) || 'password',
-      region:       safeStr(req.body?.region       ?? old.region),
+      display_name: newDisplayName,
+      ip_address:   newIp,
+      username:     newUsername,
+      port:         safePort(req.body?.port ?? old.port, 22),
+      auth_type:    safeStr(req.body?.authType ?? old.auth_type) || 'password',
+      region:       newRegion,
       status:       'connecting',
       updated_at:   nowIso(),
     };
-    if (req.body?.credential) updates.credential = String(req.body.credential);
+    if (req.body?.credential) {
+      const raw = String(req.body.credential);
+      updates.credential = isEncrypted(raw) ? raw : encryptCredential(raw);
+    }
 
     const { error: updErr } = await supabaseAdmin.from('nodes').update(updates).eq('id', nodeId);
     if (updErr) return res.status(500).json({ message: updErr.message });
@@ -1367,15 +1427,55 @@ function broadcastMetrics(data: object) {
 // --------------------------------------------------
 
 terminalWss.on('connection', async (ws, req) => {
-  const url = new URL(req.url || '', 'http://localhost');
+  const url    = new URL(req.url || '', 'http://localhost');
   const nodeId = url.searchParams.get('nodeId');
+  const token  = url.searchParams.get('token');
 
+  // ── 1. Require nodeId ──────────────────────────────────────────────────
   if (!nodeId) {
     ws.send('\r\n[terminal] Missing nodeId\r\n');
     ws.close();
     return;
   }
 
+  // ── 2. Authenticate the user via Supabase JWT ──────────────────────
+  if (!token) {
+    ws.send('\r\n[terminal] Unauthorized: missing token\r\n');
+    ws.close();
+    return;
+  }
+
+  let wsUserId: string;
+  let wsUserRole: string;
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) throw new Error('invalid token');
+    wsUserId = user.id;
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role').eq('id', user.id).single();
+    wsUserRole = profile?.role ?? 'intern';
+  } catch {
+    ws.send('\r\n[terminal] Unauthorized: invalid or expired token\r\n');
+    ws.close();
+    return;
+  }
+
+  // ── 3. Verify node assignment (non-admin must be explicitly assigned) ──
+  if (wsUserRole !== 'admin') {
+    const { data: assignment } = await supabaseAdmin
+      .from('node_assignments')
+      .select('node_id')
+      .eq('user_id', wsUserId)
+      .eq('node_id', nodeId)
+      .single();
+    if (!assignment) {
+      ws.send('\r\n[terminal] Forbidden: you are not assigned to this node\r\n');
+      ws.close();
+      return;
+    }
+  }
+
+  // ── 4. Fetch node (credential decrypted by readNodesFromSupabase) ─────
   const { data: nodeRow } = await supabaseAdmin
     .from('nodes').select('*').eq('id', nodeId).single();
   if (!nodeRow) {
@@ -1386,7 +1486,9 @@ terminalWss.on('connection', async (ws, req) => {
   const node: NodeRecord = {
     id: nodeRow.id, displayName: nodeRow.display_name, ipAddress: nodeRow.ip_address,
     username: nodeRow.username, port: nodeRow.port, authType: nodeRow.auth_type,
-    credential: nodeRow.credential, region: nodeRow.region, status: nodeRow.status,
+    // Decrypt credential in-memory for SSH — never forwarded to the client
+    credential: (() => { try { return decryptCredential(nodeRow.credential); } catch { return nodeRow.credential; } })(),
+    region: nodeRow.region, status: nodeRow.status,
     createdAt: nodeRow.created_at, updatedAt: nodeRow.updated_at,
   };
 

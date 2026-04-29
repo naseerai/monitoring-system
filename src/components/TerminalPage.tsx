@@ -49,10 +49,11 @@ interface TerminalPageProps {
 
 // ─── WebSocket URL helper ────────────────────────────────────────────────────
 
-function getTerminalWsUrl(nodeId: string): string {
+function getTerminalWsUrl(nodeId: string, token?: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
-  return `${protocol}//${host}/ws/terminal?nodeId=${encodeURIComponent(nodeId)}`;
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+  return `${protocol}//${host}/ws/terminal?nodeId=${encodeURIComponent(nodeId)}${tokenParam}`;
 }
 
 function getMetricsWsUrl(): string {
@@ -198,7 +199,7 @@ export default function TerminalPage({ nodeId, onBack, allNodes, onNavigateNode,
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(getTerminalWsUrl(nodeId));
+      ws = new WebSocket(getTerminalWsUrl(nodeId, session?.access_token ?? undefined));
     } catch (err) {
       term.writeln(`\x1b[31m[terminal] Failed to connect: ${String(err)}\x1b[0m`);
       setConnStatus('disconnected');

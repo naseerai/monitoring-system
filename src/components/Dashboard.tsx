@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+
 import {
   Cpu, HardDrive, Clock, Search, Bell, Sliders, Rocket,
   Shield, Activity, Wifi, ChevronRight, ChevronLeft,
@@ -234,16 +235,21 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="relative">
+          {/* <div className="relative">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
               type="text"
               placeholder="Search..."
               className="bg-[#111111] border border-[#1F1F1F] pl-9 pr-4 py-2 rounded-lg text-sm text-white focus:outline-none focus:border-neon-lime/40 transition-colors w-48"
             />
-          </div>
-          <button className="text-gray-400 hover:text-white transition-colors"><Bell size={18} /></button>
-          <button className="text-gray-400 hover:text-white transition-colors"><Sliders size={18} /></button>
+          </div> */}
+          {/* <button className="text-gray-400 hover:text-white transition-colors"><Bell size={18} /></button> */}
+          <button
+  onClick={() => { window.location.hash = "profile"; }}
+  className="text-gray-400 hover:text-white transition-colors"
+>
+  <Sliders size={18} />
+</button>
           <button className="bg-neon-lime text-black px-5 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-[#BDE600] transition-colors shadow-[0_0_16px_rgba(212,255,0,0.2)]">
             <Rocket size={14} /> Deploy
           </button>
