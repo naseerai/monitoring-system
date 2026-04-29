@@ -1,8 +1,9 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Shield, Eye, EyeOff, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export default function LoginPage() {
+export default function LoginPage({ onBackToLanding }: { onBackToLanding: () => void }) {
   const { signIn } = useAuth();
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
@@ -109,6 +110,13 @@ export default function LoginPage() {
                 'AUTHENTICATE'
               )}
             </button>
+            <button
+  type="button"
+  onClick={onBackToLanding}
+  className="w-full mt-3 border border-neon-lime/40 text-neon-lime font-semibold py-3 rounded-lg text-sm tracking-wide transition-all hover:bg-neon-lime/10"
+>
+  GO TO LANDING PAGE
+</button>
           </form>
 
           <p className="text-center text-[10px] text-gray-600 mt-6 tracking-widest uppercase">

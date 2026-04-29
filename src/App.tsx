@@ -83,7 +83,7 @@ export default function App() {
 
   // ── Auth gate ─────────────────────────────────────────────────────────────
   if (!session) {
-    if (showLogin) return <LoginPage />;
+    if (showLogin) return <LoginPage onBackToLanding={() => setShowLogin(false)} />;
     return <LandingPage onNavigateToLogin={() => setShowLogin(true)} />;
   }
 
