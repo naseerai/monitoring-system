@@ -21,18 +21,22 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy only needed files
+# Copy package files and install production deps
 COPY package*.json ./
-
 RUN npm install --production
 
-# Copy backend + built frontend
+# Copy the built frontend bundle
 COPY --from=builder /app/dist ./dist
+
+# Copy the backend entry-point and ALL source files it imports at runtime
 COPY --from=builder /app/server.ts ./server.ts
+COPY --from=builder /app/src ./src
+
+# Reuse the already-installed node_modules from Stage 1
 COPY --from=builder /app/node_modules ./node_modules
 
 # Expose backend port
 EXPOSE 3000
 
-# Run server
+# tsx resolves TypeScript imports natively — no compile step needed
 CMD ["npx", "tsx", "server.ts"]
