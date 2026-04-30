@@ -393,6 +393,146 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
           </div>
         </div>
       </section>
+    {/* ── Interfaces of the Application ────────────────────────────────────────────────── */}
+ <section style={{ padding: '100px 24px', position: 'relative' }}>
+  <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+    <div style={{ textAlign: 'center', marginBottom: 56 }}>
+      <p style={{
+        fontSize: 11,
+        color: '#DFFF00',
+        letterSpacing: '0.2em',
+        fontWeight: 600,
+        marginBottom: 12
+      }}>
+        PLATFORM PREVIEWS
+      </p>
+
+      <h2 style={{
+        fontSize: 'clamp(28px, 4vw, 44px)',
+        fontWeight: 800,
+        letterSpacing: '-0.02em',
+        marginBottom: 14
+      }}>
+        See the Interface in Action
+      </h2>
+
+      <p style={{
+        fontSize: 16,
+        color: '#666',
+        maxWidth: 720,
+        margin: '0 auto',
+        lineHeight: 1.7
+      }}>
+        Explore the core surfaces of Neon Sentry — from node visibility and terminal control
+        to infrastructure-level command flows.
+      </p>
+    </div>
+
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gap: 22,
+      }}
+      className="preview-grid"
+    >
+      {[
+        {
+          title: 'Operations Dashboard',
+          desc: 'Unified visibility across active infrastructure and critical metrics.',
+          img: '/dashboard.png',
+        },
+        {
+          title: 'Node Control Surface',
+          desc: 'Inspect node-level state, performance, and orchestration controls.',
+          img: '/terminal.png',
+        },
+        {
+          title: 'Interactive Terminal',
+          desc: 'Execute operational commands through a secure, controlled shell interface.',
+          img: '/terminal.png',
+        },
+      ].map((item) => (
+        <div
+          key={item.title}
+          style={{
+            background: 'linear-gradient(180deg, #0a0f0a 0%, #070707 100%)',
+            border: '1px solid #1a2a1a',
+            borderRadius: 20,
+            overflow: 'hidden',
+            boxShadow: '0 0 30px rgba(0,200,100,0.06)',
+          }}
+        >
+          {/* Fake window bar */}
+          <div style={{
+            background: '#0d1a0d',
+            borderBottom: '1px solid #162416',
+            padding: '10px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          }}>
+            <span className="mac-dot" style={{ background: '#ff5f57' }} />
+            <span className="mac-dot" style={{ background: '#ffbd2e' }} />
+            <span className="mac-dot" style={{ background: '#28ca41' }} />
+            <span style={{
+              marginLeft: 'auto',
+              fontSize: 11,
+              color: '#466246',
+              letterSpacing: '0.08em'
+            }}>
+              PREVIEW
+            </span>
+          </div>
+
+          {/* Screenshot */}
+          <div style={{
+            position: 'relative',
+            aspectRatio: '16 / 10',
+            overflow: 'hidden',
+            background: '#050505'
+          }}>
+            <img
+              src={item.img}
+              alt={item.title}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block'
+              }}
+            />
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'linear-gradient(180deg, rgba(5,5,5,0) 40%, rgba(5,5,5,0.22) 100%)'
+            }} />
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: '20px 18px 22px' }}>
+            <h3 style={{
+              fontSize: 17,
+              fontWeight: 700,
+              color: '#f3f3f3',
+              marginBottom: 10
+            }}>
+              {item.title}
+            </h3>
+
+            <p style={{
+              fontSize: 14,
+              color: '#666',
+              lineHeight: 1.7
+            }}>
+              {item.desc}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
 
       {/* ── SECURITY SPOTLIGHT ──────────────────────────────────────────── */}
       <section id="security" style={{ padding: '80px 24px', position: 'relative', overflow: 'hidden' }}>
@@ -411,7 +551,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
 
               {[
                 { icon: <Lock size={16} color="#DFFF00" />, title: 'End-to-End Encryption', desc: 'All telemetry and command data flows through AES-256 encrypted SSH2 tunnels.' },
-                { icon: <Database size={16} color="#DFFF00" />, title: 'Supabase Integration', desc: 'Centralised identity management with instant revocation and granular permissions.' },
+                { icon: <Database size={16} color="#3e3e3aff" />, title: 'Supabase Integration', desc: 'Centralised identity management with instant revocation and granular permissions.' },
               ].map(item => (
                 <div key={item.title} style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
                   <div style={{ width: 36, height: 36, background: 'rgba(223,255,0,0.08)', border: '1px solid rgba(223,255,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -530,7 +670,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
       </section>
 
       {/* ── TECH STACK ROW ──────────────────────────────────────────────── */}
-      <section style={{ padding: '60px 24px', borderTop: '1px solid #0f0f0f', borderBottom: '1px solid #0f0f0f' }}>
+      <section style={{ padding: '60px 24px', }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', textAlign: 'center' }}>
           <p style={{ fontSize: 11, color: '#feeaeaff', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 32 }}>ENGINEERED WITH PRECISION</p>
           <div className="tech-row" style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap' }}>

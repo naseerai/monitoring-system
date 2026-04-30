@@ -229,11 +229,21 @@ function CreateUserModal({
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ email, password, role: creatableRole, created_by: createdById }),
       });
+      
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to create user');
+      
+      if (!res.ok) {
+        // Here we catch the specific error message from the server
+        if (data.message && data.message.includes("already been registered")) {
+          throw new Error("This email is already in use. Please use a different email or find the existing user.");
+        }
+        throw new Error(data.message || 'Failed to create user');
+      }
+
       onCreated();
       onClose();
     } catch (err: any) {
+      // This sets the error message to be displayed in the UI
       setError(err.message);
     } finally {
       setCreating(false);

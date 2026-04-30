@@ -1224,14 +1224,27 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee'), asy
       return res.status(500).json({ message: createErr?.message || 'Failed to create user' });
     }
 
-    // Upsert profile with role + created_by
-    await supabaseAdmin.from('profiles').upsert({
+    // Upsert profile with role + created_by.
+    // IMPORTANT: treat a profile-write failure as fatal.
+    // If this step fails the auth user becomes an orphan (email "taken" but
+    // invisible in the UI), so we delete the auth user before returning an error.
+    const { error: profileErr } = await supabaseAdmin.from('profiles').upsert({
       id: newUser.user.id,
       email,
       role,
       created_by: created_by || req.userId,
     });
 
+    if (profileErr) {
+      console.error('[CREATE-USER] Profile upsert failed — rolling back auth user:', profileErr.message);
+      // Roll back: remove the orphaned auth.users row so the email is freed
+      await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
+      return res.status(500).json({
+        message: `User created in Auth but profile write failed (rolled back): ${profileErr.message}`,
+      });
+    }
+
+    console.log(`[CREATE-USER] ✓ Auth + profile created for ${email} (role: ${role})`);
     return res.status(201).json({ id: newUser.user.id, email, role });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
