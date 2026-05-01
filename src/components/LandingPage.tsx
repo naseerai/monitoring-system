@@ -1,11 +1,341 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield, Activity, Server, Terminal, Lock, CheckCircle,
-  ChevronRight, ChevronDown, Menu, X, Wifi, Box, Cpu, Database, ArrowRight
+  ChevronRight, ChevronLeft, ChevronDown, Menu, X, Wifi, Box, Cpu, Database, ArrowRight, ZoomIn, Maximize2
 } from 'lucide-react';
 
 interface Props {
   onNavigateToLogin: () => void;
+}
+
+const GALLERY_ITEMS = [
+  {
+    img: '/dashboard.png',
+    title: 'Operations Dashboard',
+    tag: 'MONITORING',
+    desc: 'Live fleet-wide overview — CPU, RAM, network, disk, and uptime across all nodes at a glance.',
+  },
+  {
+    img: '/terminal.png',
+    title: 'Sentry Shell Terminal',
+    tag: 'TERMINAL',
+    desc: 'Full xterm.js interactive SSH terminal with real-time telemetry panels and multi-node switching.',
+  },
+  {
+    img: '/security-tablet.png',
+    title: 'Security & RBAC Console',
+    tag: 'SECURITY',
+    desc: 'Role-based access control interface — assign nodes, manage operators, and enforce permissions.',
+  },
+  {
+    img: '/terminal.png',
+    title: 'Node Control Surface',
+    tag: 'NODES',
+    desc: 'Per-node deep-dive: hardware specs, Docker containers, process table, and orchestration controls.',
+  },
+];
+
+function GalleryLightbox({
+  items, index, onClose, onPrev, onNext, onGoTo,
+}: {
+  items: typeof GALLERY_ITEMS;
+  index: number;
+  onClose: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onGoTo: (i: number) => void;
+}) {
+  const item = items[index];
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft') onPrev();
+      if (e.key === 'ArrowRight') onNext();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose, onPrev, onNext]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.92)',
+        backdropFilter: 'blur(16px)',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        padding: '24px 16px',
+      }}
+    >
+      {/* Close */}
+      <button
+        onClick={onClose}
+        style={{ position: 'absolute', top: 20, right: 20, background: 'rgba(255,255,255,0.06)', border: '1px solid #333', color: '#fff', borderRadius: 8, width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
+      >
+        <X size={18} />
+      </button>
+
+      {/* Counter */}
+      <div style={{ position: 'absolute', top: 24, left: 24, fontSize: 11, color: '#555', letterSpacing: '0.12em', fontWeight: 700 }}>
+        {index + 1} / {items.length}
+      </div>
+
+      {/* Main image container */}
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 1100,
+          background: 'linear-gradient(180deg, #0a0f0a 0%, #060606 100%)',
+          border: '1px solid #1a2a1a',
+          borderRadius: 20, overflow: 'hidden',
+          boxShadow: '0 0 80px rgba(0,200,100,0.12)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* Window bar */}
+        <div style={{ background: '#0d1a0d', borderBottom: '1px solid #162416', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ff5f57', display: 'inline-block' }} />
+          <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ffbd2e', display: 'inline-block' }} />
+          <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#28ca41', display: 'inline-block' }} />
+          <span style={{ flex: 1, textAlign: 'center', fontSize: 11, color: '#3a5a3a', letterSpacing: '0.1em' }}>MYACCESS // {item.tag}</span>
+        </div>
+
+        {/* Image */}
+        <div style={{ position: 'relative', aspectRatio: '16/9', overflow: 'hidden', background: '#050505' }}>
+          <img
+            src={item.img}
+            alt={item.title}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform 0.4s' }}
+          />
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, transparent 60%, rgba(5,5,5,0.5) 100%)' }} />
+        </div>
+
+        {/* Caption */}
+        <div style={{ padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <span style={{ fontSize: 10, color: '#DFFF00', letterSpacing: '0.16em', fontWeight: 700, display: 'block', marginBottom: 4 }}>{item.tag}</span>
+            <h3 style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 4 }}>{item.title}</h3>
+            <p style={{ fontSize: 13, color: '#666', lineHeight: 1.65, maxWidth: 600 }}>{item.desc}</p>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+            <button onClick={e => { e.stopPropagation(); onPrev(); }}
+              style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid #2a2a2a', color: '#aaa', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#DFFF00'; e.currentTarget.style.color = '#DFFF00'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#2a2a2a'; e.currentTarget.style.color = '#aaa'; }}
+            ><ChevronLeft size={18} /></button>
+            <button onClick={e => { e.stopPropagation(); onNext(); }}
+              style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid #2a2a2a', color: '#aaa', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#DFFF00'; e.currentTarget.style.color = '#DFFF00'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#2a2a2a'; e.currentTarget.style.color = '#aaa'; }}
+            ><ChevronRight size={18} /></button>
+          </div>
+        </div>
+      </div>
+
+      {/* Thumbnail strip */}
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ display: 'flex', gap: 10, marginTop: 16, overflowX: 'auto', maxWidth: '100%', paddingBottom: 4 }}
+      >
+        {items.map((it, i) => (
+          <button
+            key={i}
+            onClick={e => { e.stopPropagation(); onGoTo(i); }}
+            style={{
+              width: 80, height: 52, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+              border: i === index ? '2px solid #DFFF00' : '2px solid #222',
+              boxShadow: i === index ? '0 0 12px rgba(223,255,0,0.3)' : 'none',
+              padding: 0, cursor: 'pointer', transition: 'all 0.2s',
+              opacity: i === index ? 1 : 0.5,
+            }}
+          >
+            <img src={it.img} alt={it.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          </button>
+        ))}
+      </div>
+
+      <p style={{ marginTop: 14, fontSize: 11, color: '#444', letterSpacing: '0.08em' }}>ESC to close · ← → to navigate</p>
+    </div>
+  );
+}
+
+function GallerySection() {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const openLightbox = (i: number) => setLightboxIndex(i);
+  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+  const goPrev = useCallback(() => setLightboxIndex(i => (i === null ? 0 : (i - 1 + GALLERY_ITEMS.length) % GALLERY_ITEMS.length)), []);
+  const goNext = useCallback(() => setLightboxIndex(i => (i === null ? 0 : (i + 1) % GALLERY_ITEMS.length)), []);
+  const goTo  = useCallback((i: number) => setLightboxIndex(i), []);
+
+  const tagColors: Record<string, string> = {
+    MONITORING: '#DFFF00',
+    TERMINAL:   '#a78bfa',
+    SECURITY:   '#22c55e',
+    NODES:      '#00c8ff',
+  };
+
+  return (
+    <>
+      {/* Gallery CSS */}
+      <style>{`
+        .gal-card {
+          background: linear-gradient(180deg, #0a0f0a 0%, #070707 100%);
+          border: 1px solid #1a2a1a;
+          border-radius: 20px;
+          overflow: hidden;
+          cursor: pointer;
+          transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+          position: relative;
+        }
+        .gal-card:hover {
+          transform: translateY(-6px);
+          border-color: rgba(223,255,0,0.4);
+          box-shadow: 0 0 40px rgba(223,255,0,0.1);
+        }
+        .gal-img-wrap {
+          position: relative;
+          aspect-ratio: 16 / 10;
+          overflow: hidden;
+          background: #050505;
+        }
+        .gal-img {
+          width: 100%; height: 100%;
+          object-fit: cover;
+          display: block;
+          transition: transform 0.5s ease;
+        }
+        .gal-card:hover .gal-img {
+          transform: scale(1.04);
+        }
+        .gal-overlay {
+          position: absolute; inset: 0;
+          background: linear-gradient(180deg, transparent 40%, rgba(5,5,5,0.7) 100%);
+          opacity: 0;
+          transition: opacity 0.3s;
+          display: flex; align-items: center; justify-content: center;
+        }
+        .gal-card:hover .gal-overlay { opacity: 1; }
+        .gal-zoom-icon {
+          background: rgba(223,255,0,0.15);
+          border: 1px solid rgba(223,255,0,0.4);
+          border-radius: 50%;
+          width: 52px; height: 52px;
+          display: flex; align-items: center; justify-content: center;
+          transform: scale(0.7);
+          transition: transform 0.25s;
+        }
+        .gal-card:hover .gal-zoom-icon { transform: scale(1); }
+        .gal-tag {
+          display: inline-flex; align-items: center;
+          padding: 3px 10px; border-radius: 40px;
+          font-size: 9px; font-weight: 800; letter-spacing: 0.14em;
+          margin-bottom: 10px;
+        }
+        .gal-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+        }
+        @media (max-width: 900px) {
+          .gal-grid { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 560px) {
+          .gal-grid { grid-template-columns: 1fr; }
+        }
+        .gal-featured {
+          grid-column: 1 / -1;
+        }
+        @media (max-width: 560px) {
+          .gal-featured { grid-column: 1; }
+        }
+      `}</style>
+
+      <section id="gallery" style={{ padding: '100px 24px', position: 'relative' }}>
+        <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+
+          {/* Header */}
+          <div style={{ textAlign: 'center', marginBottom: 60 }}>
+            <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>CONTROL PANEL</p>
+            <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 14 }}>See the Interface in Action</h2>
+            <p style={{ fontSize: 16, color: '#666', maxWidth: 620, margin: '0 auto', lineHeight: 1.7 }}>
+              A visual tour of every surface — from the live monitoring dashboard to the interactive SSH terminal and security console.
+            </p>
+          </div>
+
+          {/* Gallery grid: first card spans full width, rest 2-col */}
+          <div className="gal-grid">
+            {GALLERY_ITEMS.map((item, i) => {
+              const tagColor = tagColors[item.tag] ?? '#DFFF00';
+              return (
+                <div
+                  key={item.title}
+                  className={`gal-card${i === 0 ? ' gal-featured' : ''}`}
+                  onClick={() => openLightbox(i)}
+                >
+                  {/* Mac-style titlebar */}
+                  <div style={{ background: '#0d1a0d', borderBottom: '1px solid #162416', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ff5f57', display: 'inline-block' }} />
+                    <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ffbd2e', display: 'inline-block' }} />
+                    <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#28ca41', display: 'inline-block' }} />
+                    <span style={{ marginLeft: 'auto', fontSize: 11, color: '#466246', letterSpacing: '0.08em' }}>MYACCESS // {item.tag}</span>
+                  </div>
+
+                  {/* Image */}
+                  <div className="gal-img-wrap">
+                    <img src={item.img} alt={item.title} className="gal-img" />
+                    <div className="gal-overlay">
+                      <div className="gal-zoom-icon">
+                        <Maximize2 size={20} color="#DFFF00" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card footer */}
+                  <div style={{ padding: '18px 20px 22px' }}>
+                    <div
+                      className="gal-tag"
+                      style={{ background: `${tagColor}18`, border: `1px solid ${tagColor}40`, color: tagColor }}
+                    >
+                      {item.tag}
+                    </div>
+                    <h3 style={{ fontSize: i === 0 ? 20 : 17, fontWeight: 700, color: '#f3f3f3', marginBottom: 8 }}>{item.title}</h3>
+                    <p style={{ fontSize: 13, color: '#666', lineHeight: 1.7 }}>{item.desc}</p>
+                    <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <ZoomIn size={13} color={tagColor} />
+                      <span style={{ fontSize: 11, color: tagColor, fontWeight: 600, letterSpacing: '0.06em' }}>Click to expand</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Total count badge */}
+          <div style={{ textAlign: 'center', marginTop: 32 }}>
+            <span style={{ fontSize: 12, color: '#444', letterSpacing: '0.1em' }}>
+              {GALLERY_ITEMS.length} INTERFACE VIEWS — Click any to enter fullscreen
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* Lightbox */}
+      {lightboxIndex !== null && (
+        <GalleryLightbox
+          items={GALLERY_ITEMS}
+          index={lightboxIndex}
+          onClose={closeLightbox}
+          onPrev={goPrev}
+          onNext={goNext}
+          onGoTo={goTo}
+        />
+      )}
+    </>
+  );
 }
 
 function FaqItem({ q, a }: { q: string; a: string }) {
@@ -518,146 +848,8 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
         </div>
       </section>
 
-    {/* ──PLATFORM PREVIEWS ────────────────────────────────────────────────── */}
- <section style={{ padding: '100px 24px', position: 'relative' }}>
-  <div style={{ maxWidth: 1180, margin: '0 auto' }}>
-    <div style={{ textAlign: 'center', marginBottom: 56 }}>
-      <p style={{
-        fontSize: 11,
-        color: '#DFFF00',
-        letterSpacing: '0.2em',
-        fontWeight: 600,
-        marginBottom: 12
-      }}>
-        PLATFORM PREVIEWS
-      </p>
-
-      <h2 style={{
-        fontSize: 'clamp(28px, 4vw, 44px)',
-        fontWeight: 800,
-        letterSpacing: '-0.02em',
-        marginBottom: 14
-      }}>
-        See the Interface in Action
-      </h2>
-
-      <p style={{
-        fontSize: 16,
-        color: '#666',
-        maxWidth: 720,
-        margin: '0 auto',
-        lineHeight: 1.7
-      }}>
-        Explore the core surfaces of Neon Sentry — from node visibility and terminal control
-        to infrastructure-level command flows.
-      </p>
-    </div>
-
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
-        gap: 22,
-      }}
-      className="preview-grid"
-    >
-      {[
-        {
-          title: 'Operations Dashboard',
-          desc: 'Unified visibility across active infrastructure and critical metrics.',
-          img: '/dashboard.png',
-        },
-        {
-          title: 'Node Control Surface',
-          desc: 'Inspect node-level state, performance, and orchestration controls.',
-          img: '/terminal.png',
-        },
-        {
-          title: 'Interactive Terminal',
-          desc: 'Execute operational commands through a secure, controlled shell interface.',
-          img: '/terminal.png',
-        },
-      ].map((item) => (
-        <div
-          key={item.title}
-          style={{
-            background: 'linear-gradient(180deg, #0a0f0a 0%, #070707 100%)',
-            border: '1px solid #1a2a1a',
-            borderRadius: 20,
-            overflow: 'hidden',
-            boxShadow: '0 0 30px rgba(0,200,100,0.06)',
-          }}
-        >
-          {/* Fake window bar */}
-          <div style={{
-            background: '#0d1a0d',
-            borderBottom: '1px solid #162416',
-            padding: '10px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8
-          }}>
-            <span className="mac-dot" style={{ background: '#ff5f57' }} />
-            <span className="mac-dot" style={{ background: '#ffbd2e' }} />
-            <span className="mac-dot" style={{ background: '#28ca41' }} />
-            <span style={{
-              marginLeft: 'auto',
-              fontSize: 11,
-              color: '#466246',
-              letterSpacing: '0.08em'
-            }}>
-              PREVIEW
-            </span>
-          </div>
-
-          {/* Screenshot */}
-          <div style={{
-            position: 'relative',
-            aspectRatio: '16 / 10',
-            overflow: 'hidden',
-            background: '#050505'
-          }}>
-            <img
-              src={item.img}
-              alt={item.title}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                display: 'block'
-              }}
-            />
-            <div style={{
-              position: 'absolute',
-              inset: 0,
-              background: 'linear-gradient(180deg, rgba(5,5,5,0) 40%, rgba(5,5,5,0.22) 100%)'
-            }} />
-          </div>
-
-          {/* Content */}
-          <div style={{ padding: '20px 18px 22px' }}>
-            <h3 style={{
-              fontSize: 17,
-              fontWeight: 700,
-              color: '#f3f3f3',
-              marginBottom: 10
-            }}>
-              {item.title}
-            </h3>
-
-            <p style={{
-              fontSize: 14,
-              color: '#666',
-              lineHeight: 1.7
-            }}>
-              {item.desc}
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-</section>
+      {/* ── CONTROL PANEL GALLERY ───────────────────────────────────────── */}
+      <GallerySection />
 
 {/* ── GLOBAL NODE MAP ───────────────────────────────────────── */}
 <section style={{ padding: '100px 24px' }}>
