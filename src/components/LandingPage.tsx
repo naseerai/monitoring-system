@@ -1,11 +1,31 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   Shield, Activity, Server, Terminal, Lock, CheckCircle,
-  ChevronRight, Menu, X, Wifi, Box, Cpu, Database, ArrowRight
+  ChevronRight, ChevronDown, Menu, X, Wifi, Box, Cpu, Database, ArrowRight
 } from 'lucide-react';
 
 interface Props {
   onNavigateToLogin: () => void;
+}
+
+function FaqItem({ q, a }: { q: string; a: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{ border: '1px solid #1a1a1a', borderRadius: 12, overflow: 'hidden', marginBottom: 2 }}
+      onClick={() => setOpen(o => !o)}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', cursor: 'pointer', background: open ? 'rgba(223,255,0,0.03)' : '#0c0c0c' }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: '#f0f0f0' }}>{q}</span>
+        <ChevronDown size={16} color="#666" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.25s', flexShrink: 0, marginLeft: 16 }} />
+      </div>
+      {open && (
+        <div style={{ padding: '0 22px 18px', background: 'rgba(223,255,0,0.02)' }}>
+          <p style={{ fontSize: 14, color: '#666', lineHeight: 1.75 }}>{a}</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function LandingPage({ onNavigateToLogin }: Props) {
@@ -264,8 +284,8 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
 
 .node-pulse {
   position: absolute;
-  width: 14px;
-  height: 14px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #DFFF00;
   box-shadow: 0 0 18px rgba(223,255,0,0.7);
@@ -391,7 +411,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
             <button className="btn-primary" onClick={onNavigateToLogin} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               Initialize Cluster <ArrowRight size={15} />
             </button>
-            <button className="btn-outline">View Documentation</button>
+            <button className="btn-outline" onClick={() => scrollTo('nodes')}>View Features</button>
           </div>
 
           {/* ── SENTRY SHELL TERMINAL ─────────────────────────────── */}
@@ -468,6 +488,36 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
           </div>
         </div>
       </section>
+
+      {/* ── HOW IT WORKS ─────────────────────────────────────────────────── */}
+      <section id="docs" style={{ padding: '100px 24px', position: 'relative' }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: 64 }}>
+            <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>HOW IT WORKS</p>
+            <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 14 }}>Up and Running in Minutes</h2>
+            <p style={{ fontSize: 16, color: '#666', maxWidth: 560, margin: '0 auto', lineHeight: 1.7 }}>No agents, no plugins. Just your server credentials and sovereign control.</p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 32, position: 'relative' }}>
+            {/* Connector line */}
+            <div style={{ position: 'absolute', top: 36, left: '16.5%', right: '16.5%', height: 1, background: 'linear-gradient(90deg, transparent, rgba(223,255,0,0.2), transparent)', zIndex: 0 }} />
+            {[
+              { step: '01', icon: '🔑', title: 'Add Your Server', desc: 'Provide an IP address, SSH credentials, and a display name. No software installation required on the target machine.' },
+              { step: '02', icon: '⚡', title: 'Instant Connection', desc: 'MYACCESS opens an encrypted SSH tunnel and begins collecting real-time CPU, RAM, disk, and network telemetry.' },
+              { step: '03', icon: '🛡️', title: 'Take Command', desc: 'Monitor live metrics, open an interactive terminal, manage Docker containers, and control access with RBAC roles.' },
+            ].map(s => (
+              <div key={s.step} style={{ textAlign: 'center', position: 'relative', zIndex: 1 }}>
+                <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'rgba(223,255,0,0.06)', border: '1px solid rgba(223,255,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px', fontSize: 28 }}>
+                  {s.icon}
+                </div>
+                <div style={{ fontSize: 10, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 700, marginBottom: 10 }}>STEP {s.step}</div>
+                <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>{s.title}</h3>
+                <p style={{ fontSize: 14, color: '#666', lineHeight: 1.7 }}>{s.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
     {/* ──PLATFORM PREVIEWS ────────────────────────────────────────────────── */}
  <section style={{ padding: '100px 24px', position: 'relative' }}>
   <div style={{ maxWidth: 1180, margin: '0 auto' }}>
@@ -639,7 +689,8 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
       {/* Node Points */}
       <div className="node-pulse" style={{ top: '30%', left: '22%' }} />
       <div className="node-pulse" style={{ top: '42%', left: '48%' }} />
-      <div className="node-pulse" style={{ top: '55%', left: '72%' }} />
+      <div className="node-pulse" style={{ top: '55%', left: '64%' }} />
+      <div className="node-pulse" style={{ top: '29%', left: '41%' }} />
 
       {/* Stats */}
       <div className="global-stats-grid" style={{
@@ -653,7 +704,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
       }}>
         {[
           ['42', 'ACTIVE NODES'],
-          ['3', 'GLOBAL REGIONS'],
+          ['4', 'GLOBAL REGIONS'],
           ['99.99%', 'UPTIME'],
           ['12ms', 'AVG LATENCY']
         ].map(([value, label]) => (
@@ -705,62 +756,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
   </div>
 </section>
 
-{/* ── INTERACTIVE PRODUCT TOUR ─────────────────────────────── */}
-<section style={{ padding: '100px 24px' }}>
-  <div style={{ maxWidth: 1180, margin: '0 auto' }}>
-    <div style={{ textAlign: 'center', marginBottom: 56 }}>
-      <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600 }}>
-        PRODUCT TOUR
-      </p>
-      <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800 }}>
-        Explore Mission-Critical Interfaces
-      </h2>
-    </div>
 
-    <div className="product-tour-grid" style={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(3,1fr)',
-      gap: 24
-    }}>
-      {[
-        ['Dashboard Intelligence', '/dashboard.png'],
-        ['Secure Shell Operations', '/terminal.png'],
-        ['Security Governance', '/security-tablet.png']
-      ].map(([title, img]) => (
-        <div key={title} className="tour-card">
-          <div style={{ position: 'relative', aspectRatio: '16/10' }}>
-            <img
-              src={img}
-              alt={title}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover'
-              }}
-            />
-            <div className="tour-overlay" />
-            <button className="btn-primary" style={{
-              position: 'absolute',
-              bottom: 18,
-              left: 18,
-              padding: '8px 16px',
-              fontSize: 12
-            }}>
-              Launch Preview
-            </button>
-          </div>
-
-          <div style={{ padding: '20px' }}>
-            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>{title}</h3>
-            <p style={{ fontSize: 14, color: '#666', lineHeight: 1.7 }}>
-              Deep operational visibility with premium control surfaces engineered for sovereign infrastructure.
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-</section>
 
       {/* ── SECURITY SPOTLIGHT ──────────────────────────────────────────── */}
       <section id="security" style={{ padding: '80px 24px', position: 'relative', overflow: 'hidden' }}>
@@ -779,7 +775,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
 
               {[
                 { icon: <Lock size={16} color="#DFFF00" />, title: 'End-to-End Encryption', desc: 'All telemetry and command data flows through AES-256 encrypted SSH2 tunnels.' },
-                { icon: <Database size={16} color="#3e3e3aff" />, title: 'Supabase Integration', desc: 'Centralised identity management with instant revocation and granular permissions.' },
+                { icon: <Database size={16} color="#6366f1" />, title: 'Supabase Integration', desc: 'Centralised identity management with instant revocation and granular permissions.' },
               ].map(item => (
                 <div key={item.title} style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
                   <div style={{ width: 36, height: 36, background: 'rgba(223,255,0,0.08)', border: '1px solid rgba(223,255,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -918,7 +914,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
       </section>
 
       {/* ── CTA BOX ─────────────────────────────────────────────────────── */}
-      <section id="pricing" style={{ padding: '100px 24px' }}>
+      <section style={{ padding: '100px 24px' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', textAlign: 'center' }}>
           <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 24, padding: 'clamp(40px, 6vw, 72px) clamp(24px, 6vw, 72px)', position: 'relative', overflow: 'hidden' }}>
             {/* Glow inside */}
@@ -936,11 +932,109 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
                 <button className="btn-primary" onClick={onNavigateToLogin} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, padding: '14px 32px' }}>
                   Initialize Cluster <ChevronRight size={16} />
                 </button>
-                <button className="btn-outline" style={{ fontSize: 15, padding: '14px 32px' }}>
-                  View Documentation
+                <button className="btn-outline" onClick={() => scrollTo('nodes')} style={{ fontSize: 15, padding: '14px 32px' }}>
+                  Explore Features
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── TESTIMONIALS ────────────────────────────────────────────────── */}
+      <section style={{ padding: '100px 24px' }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: 60 }}>
+            <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>TRUSTED BY OPERATORS</p>
+            <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em' }}>What Operators Are Saying</h2>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 24 }} className="feature-grid">
+            {[
+              { quote: 'MYACCESS replaced three separate tools. I can monitor all 40 of our bare-metal servers from one dashboard with zero agents installed. It\'s incredibly fast.', name: 'Rahul M.', role: 'Lead DevOps Engineer', initials: 'RM' },
+              { quote: 'The RBAC system is exactly what we needed. Our interns get terminal access only to staging nodes while admins control everything. Clean, surgical access control.', name: 'Priya S.', role: 'Infrastructure Architect', initials: 'PS' },
+              { quote: 'Real-time telemetry over SSH tunnels with no open ports — our security team finally approved a monitoring tool. The Docker orchestration layer is a bonus.', name: 'Alex T.', role: 'Senior SRE', initials: 'AT' },
+            ].map(t => (
+              <div key={t.name} className="feature-card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <div style={{ display: 'flex', gap: 2 }}>
+                  {[...Array(5)].map((_, i) => <span key={i} style={{ color: '#DFFF00', fontSize: 14 }}>★</span>)}
+                </div>
+                <p style={{ fontSize: 14, color: '#999', lineHeight: 1.75, flex: 1 }}>"{t.quote}"</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 16, borderTop: '1px solid #1a1a1a' }}>
+                  <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(223,255,0,0.1)', border: '1px solid rgba(223,255,0,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#DFFF00', flexShrink: 0 }}>{t.initials}</div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{t.name}</div>
+                    <div style={{ fontSize: 11, color: '#555' }}>{t.role}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── PRICING ────────────────────────────────────────────────────────── */}
+      <section id="pricing" style={{ padding: '100px 24px' }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: 60 }}>
+            <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>PRICING</p>
+            <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 14 }}>Transparent, Operator-First Pricing</h2>
+            <p style={{ fontSize: 16, color: '#666', maxWidth: 540, margin: '0 auto', lineHeight: 1.7 }}>No lock-in. Start free, scale when you're ready.</p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 24 }} className="feature-grid">
+            {[
+              { name: 'Starter', price: 'Free', sub: 'forever', features: ['Up to 3 nodes', 'Real-time metrics', 'Interactive terminal', 'RBAC (2 roles)', 'Community support'], cta: 'Get Started', highlight: false },
+              { name: 'Operator', price: '$29', sub: '/month', features: ['Up to 25 nodes', 'All Starter features', 'Docker orchestration', 'Full RBAC (3 roles)', 'Priority support', 'Audit logs'], cta: 'Start Free Trial', highlight: true },
+              { name: 'Sovereign', price: '$99', sub: '/month', features: ['Unlimited nodes', 'All Operator features', 'SSO / SAML', 'Custom integrations', 'SLA guarantee', 'Dedicated support'], cta: 'Contact Us', highlight: false },
+            ].map(plan => (
+              <div key={plan.name} style={{ background: plan.highlight ? 'rgba(223,255,0,0.04)' : '#0c0c0c', border: plan.highlight ? '1px solid rgba(223,255,0,0.35)' : '1px solid #1a1a1a', borderRadius: 20, padding: 32, position: 'relative', boxShadow: plan.highlight ? '0 0 40px rgba(223,255,0,0.08)' : 'none', display: 'flex', flexDirection: 'column', gap: 0 }}>
+                {plan.highlight && (
+                  <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: '#DFFF00', color: '#000', fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', padding: '4px 14px', borderRadius: 40 }}>MOST POPULAR</div>
+                )}
+                <p style={{ fontSize: 11, color: plan.highlight ? '#DFFF00' : '#666', letterSpacing: '0.16em', fontWeight: 700, marginBottom: 16 }}>{plan.name.toUpperCase()}</p>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: 42, fontWeight: 800, color: '#fff', letterSpacing: '-0.03em' }}>{plan.price}</span>
+                  <span style={{ fontSize: 14, color: '#555' }}>{plan.sub}</span>
+                </div>
+                <div style={{ height: 1, background: '#1a1a1a', margin: '24px 0' }} />
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 28 }}>
+                  {plan.features.map(f => (
+                    <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ color: '#22c55e', fontSize: 13 }}>✓</span>
+                      <span style={{ fontSize: 13, color: '#aaa' }}>{f}</span>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={onNavigateToLogin}
+                  style={{ width: '100%', padding: '12px 0', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer', border: plan.highlight ? 'none' : '1px solid #2a2a2a', background: plan.highlight ? '#DFFF00' : 'transparent', color: plan.highlight ? '#000' : '#aaa', transition: 'all 0.2s' }}
+                  onMouseEnter={e => { if (!plan.highlight) { e.currentTarget.style.borderColor = 'rgba(223,255,0,0.4)'; e.currentTarget.style.color = '#fff'; } else { e.currentTarget.style.background = '#c8e600'; } }}
+                  onMouseLeave={e => { if (!plan.highlight) { e.currentTarget.style.borderColor = '#2a2a2a'; e.currentTarget.style.color = '#aaa'; } else { e.currentTarget.style.background = '#DFFF00'; } }}
+                >
+                  {plan.cta}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FAQ ────────────────────────────────────────────────────────────── */}
+      <section style={{ padding: '80px 24px 100px' }}>
+        <div style={{ maxWidth: 760, margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: 56 }}>
+            <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>FAQ</p>
+            <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em' }}>Common Questions</h2>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {[
+              { q: 'Do I need to install an agent on my servers?', a: 'No. MYACCESS connects via standard SSH. Your server only needs to have SSH enabled — no extra software, daemons, or open ports required.' },
+              { q: 'Which operating systems are supported?', a: 'Any Linux distribution with SSH access is supported. Ubuntu, Debian, CentOS, Fedora, and Alpine are all tested and working out of the box.' },
+              { q: 'How does RBAC work?', a: 'There are three roles: Admin (full control), Employee (team management), and Intern (view-only on assigned nodes). Admins assign which nodes each user can access.' },
+              { q: 'Is my data secure?', a: 'All connections use AES-256 encrypted SSH2 tunnels. Credentials are encrypted at rest. Authentication is powered by Supabase with industry-standard JWT sessions.' },
+              { q: 'Can I self-host MYACCESS?', a: 'Yes. MYACCESS ships with a Dockerfile and docker-compose configuration. Deploy it on your own infrastructure in minutes.' },
+            ].map((item, i) => (
+              <FaqItem key={i} q={item.q} a={item.a} />
+            ))}
           </div>
         </div>
       </section>

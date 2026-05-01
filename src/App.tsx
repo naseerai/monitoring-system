@@ -118,9 +118,19 @@ export default function App() {
             )}
 
             {page === 'settings' && (
-              <>
-                <h1>Settings Page</h1>
-              </>
+              <div className="flex-1 p-8 overflow-y-auto">
+                <div className="max-w-2xl">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-bold mb-1">CONFIGURATION</p>
+                  <h1 className="text-2xl font-bold text-white tracking-tight mb-6">Settings</h1>
+                  <div className="bg-[#0D0D0D] border border-[#1A1A1A] rounded-2xl p-8 text-center">
+                    <div className="w-14 h-14 rounded-xl bg-neon-lime/10 border border-neon-lime/20 flex items-center justify-center mx-auto mb-4">
+                      <span style={{ fontSize: 24 }}>⚙️</span>
+                    </div>
+                    <p className="text-white font-bold mb-2">Settings Coming Soon</p>
+                    <p className="text-gray-500 text-sm">Advanced configuration options will be available in the next release.</p>
+                  </div>
+                </div>
+              </div>
             )}
 
             {page === 'node-detail' && selectedNodeId && (
