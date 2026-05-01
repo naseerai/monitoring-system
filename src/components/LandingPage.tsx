@@ -217,6 +217,15 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
         /* Responsive nav */
         @media (max-width: 768px) {
           .nav-links { display: none; }
+          .preview-grid {
+  grid-template-columns: 1fr !important;
+}
+.product-tour-grid {
+  grid-template-columns: 1fr !important;
+}
+.global-stats-grid {
+  grid-template-columns: 1fr 1fr !important;
+}
           .nav-links.open {
             display: flex;
             flex-direction: column;
@@ -243,7 +252,73 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
           50% { transform: translateY(-8px); }
         }
         .float-anim { animation: float 4s ease-in-out infinite; }
-      `}</style>
+        /* Global Node Grid */
+.node-map-card {
+  background: linear-gradient(180deg, #0a0f0a 0%, #070707 100%);
+  border: 1px solid #1a2a1a;
+  border-radius: 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 50px rgba(0,255,120,0.06);
+}
+
+.node-pulse {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #DFFF00;
+  box-shadow: 0 0 18px rgba(223,255,0,0.7);
+  animation: pulseNode 2.5s infinite;
+}
+
+@keyframes pulseNode {
+  0% { transform: scale(1); opacity: 1; }
+  70% { transform: scale(2.8); opacity: 0; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* Comparison table */
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.compare-table th,
+.compare-table td {
+  padding: 18px;
+  border-bottom: 1px solid #1a1a1a;
+  text-align: center;
+}
+.compare-table th {
+  color: #DFFF00;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+.compare-table td {
+  color: #ccc;
+  font-size: 14px;
+}
+
+/* Product Tour Cards */
+.tour-card {
+  background: #0a0a0a;
+  border: 1px solid #1a1a1a;
+  border-radius: 20px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+.tour-card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(223,255,0,0.35);
+  box-shadow: 0 0 40px rgba(223,255,0,0.08);
+}
+.tour-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 40%, rgba(5,5,5,0.85) 100%);
+}
+      `}
+      </style>
 
       {/* ── NAV ─────────────────────────────────────────────────────────── */}
       <nav className={`nav-sticky ${scrolled ? 'nav-scrolled' : ''}`}>
@@ -393,7 +468,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
           </div>
         </div>
       </section>
-    {/* ── Interfaces of the Application ────────────────────────────────────────────────── */}
+    {/* ──PLATFORM PREVIEWS ────────────────────────────────────────────────── */}
  <section style={{ padding: '100px 24px', position: 'relative' }}>
   <div style={{ maxWidth: 1180, margin: '0 auto' }}>
     <div style={{ textAlign: 'center', marginBottom: 56 }}>
@@ -526,6 +601,159 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
               lineHeight: 1.7
             }}>
               {item.desc}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+{/* ── GLOBAL NODE MAP ───────────────────────────────────────── */}
+<section style={{ padding: '100px 24px' }}>
+  <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+    <div style={{ textAlign: 'center', marginBottom: 56 }}>
+      <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>
+        GLOBAL INFRASTRUCTURE
+      </p>
+      <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, marginBottom: 14 }}>
+        Sovereign Node Command Grid
+      </h2>
+      <p style={{ color: '#666', maxWidth: 720, margin: '0 auto', lineHeight: 1.7 }}>
+        Real-time node intelligence across distributed infrastructure with encrypted SSH mesh visibility.
+      </p>
+    </div>
+
+    <div className="node-map-card" style={{ padding: '40px', minHeight: 500 }}>
+      <img
+        src="/world-map.avif"
+        alt="Global Map"
+        style={{
+          width: '100%',
+          opacity: 0.18,
+          objectFit: 'cover',
+          filter: 'contrast(140%)'
+        }}
+      />
+
+      {/* Node Points */}
+      <div className="node-pulse" style={{ top: '30%', left: '22%' }} />
+      <div className="node-pulse" style={{ top: '42%', left: '48%' }} />
+      <div className="node-pulse" style={{ top: '55%', left: '72%' }} />
+
+      {/* Stats */}
+      <div className="global-stats-grid" style={{
+        position: 'absolute',
+        bottom: 30,
+        left: 30,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4,1fr)',
+        gap: 18,
+        width: 'calc(100% - 60px)'
+      }}>
+        {[
+          ['42', 'ACTIVE NODES'],
+          ['3', 'GLOBAL REGIONS'],
+          ['99.99%', 'UPTIME'],
+          ['12ms', 'AVG LATENCY']
+        ].map(([value, label]) => (
+          <div key={label} className="glass-card" style={{ padding: '18px' }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#DFFF00' }}>{value}</div>
+            <div style={{ fontSize: 11, color: '#666', letterSpacing: '0.08em' }}>{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+{/* ── FEATURE COMPARISON ───────────────────────────────────── */}
+<section style={{ padding: '100px 24px' }}>
+  <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+    <div style={{ textAlign: 'center', marginBottom: 50 }}>
+      <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600 }}>
+        WHY MYACCESS
+      </p>
+      <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800 }}>
+        Infrastructure Superiority Matrix
+      </h2>
+    </div>
+
+    <div style={{
+      background: '#0a0a0a',
+      border: '1px solid #1a1a1a',
+      borderRadius: 24,
+      overflow: 'hidden'
+    }}>
+      <table className="compare-table">
+        <thead>
+          <tr>
+            <th>CAPABILITY</th>
+            <th>MYACCESS</th>
+            <th>TRADITIONAL STACK</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Agent-less Monitoring</td><td>✅</td><td>❌</td></tr>
+          <tr><td>SSH Native Control</td><td>✅</td><td>⚠️</td></tr>
+          <tr><td>RBAC Security</td><td>✅</td><td>⚠️</td></tr>
+          <tr><td>Real-Time Telemetry</td><td>✅</td><td>❌</td></tr>
+          <tr><td>Global Node Mesh</td><td>✅</td><td>❌</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+{/* ── INTERACTIVE PRODUCT TOUR ─────────────────────────────── */}
+<section style={{ padding: '100px 24px' }}>
+  <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+    <div style={{ textAlign: 'center', marginBottom: 56 }}>
+      <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600 }}>
+        PRODUCT TOUR
+      </p>
+      <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800 }}>
+        Explore Mission-Critical Interfaces
+      </h2>
+    </div>
+
+    <div className="product-tour-grid" style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(3,1fr)',
+      gap: 24
+    }}>
+      {[
+        ['Dashboard Intelligence', '/dashboard.png'],
+        ['Secure Shell Operations', '/terminal.png'],
+        ['Security Governance', '/security-tablet.png']
+      ].map(([title, img]) => (
+        <div key={title} className="tour-card">
+          <div style={{ position: 'relative', aspectRatio: '16/10' }}>
+            <img
+              src={img}
+              alt={title}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover'
+              }}
+            />
+            <div className="tour-overlay" />
+            <button className="btn-primary" style={{
+              position: 'absolute',
+              bottom: 18,
+              left: 18,
+              padding: '8px 16px',
+              fontSize: 12
+            }}>
+              Launch Preview
+            </button>
+          </div>
+
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>{title}</h3>
+            <p style={{ fontSize: 14, color: '#666', lineHeight: 1.7 }}>
+              Deep operational visibility with premium control surfaces engineered for sovereign infrastructure.
             </p>
           </div>
         </div>
