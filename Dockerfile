@@ -10,7 +10,7 @@ COPY package*.json ./
 RUN npm install
 
 # Copy all files
-COPY . .
+COPY . .8
 
 # Build frontend
 RUN npm run build

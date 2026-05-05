@@ -1,22 +1,2 @@
-import { createClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL  as string;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-
-if (!SUPABASE_URL || !SUPABASE_ANON) {
-  throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env');
-}
-
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-export type UserRole = 'admin' | 'employee' | 'intern';
-
-export interface Profile {
-  id: string;
-  email: string;
-  role: UserRole;
-  created_by: string | null;
-  created_at: string;
-}
+// Supabase removed — re-export types from api.ts for backward compatibility
+export type { UserRole, Profile } from './api';

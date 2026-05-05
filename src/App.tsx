@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from './context/AuthContext';
 import LoginPage from './components/LoginPage';
 import LandingPage from './components/LandingPage';
@@ -53,16 +53,28 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
+  // ── Auto-redirect to login on sign-out ───────────────────────────────────
+  const prevSessionRef = useRef(session);
+  useEffect(() => {
+    const wasSignedIn = prevSessionRef.current !== null;
+    const isNowSignedOut = session === null;
+    if (!loading && wasSignedIn && isNowSignedOut) {
+      setShowLogin(true);
+    }
+    prevSessionRef.current = session;
+  }, [session, loading]);
+
   // ── Hash-based routing ────────────────────────────────────────────────────
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash.replace('#', '');
       if (hash.startsWith('terminal/')) { setTerminalNodeId(hash.replace('terminal/', '')); setPage('terminal'); }
       else if (hash.startsWith('nodes/')) { setSelectedNodeId(hash.replace('nodes/', '')); setPage('node-detail'); setTerminalNodeId(null); }
-      else if (hash === 'nodes')   { setPage('nodes');   setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'users')   { setPage('users');   setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'profile') { setPage('profile'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'nodes')    { setPage('nodes');    setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'users')    { setPage('users');    setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'profile')  { setPage('profile');  setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'settings') { setPage('settings'); setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'login')    { setShowLogin(true);  setPage('dashboard'); }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
     handleHash();

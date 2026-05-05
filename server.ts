@@ -6,7 +6,9 @@ import { Client } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.ts';
 
@@ -42,12 +44,20 @@ function assertNoShellChars(value: string, fieldName: string): void {
 }
 
 // --------------------------------------------------
-// Supabase admin client (service role — backend only)
+// PostgreSQL pool
 // --------------------------------------------------
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+pool.on('error', (err) => console.error('[PG] Unexpected pool error', err));
+
+const JWT_SECRET = process.env.JWT_SECRET || 'change_me_in_production';
+
+function signToken(payload: { id: string; email: string; role: string }): string {
+  return (jwt as any).sign(payload, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function verifyJwt(token: string): { id: string; email: string; role: string } {
+  return (jwt as any).verify(token, JWT_SECRET) as any;
+}
 
 // --------------------------------------------------
 // Paths
@@ -342,32 +352,29 @@ function safePort(v: unknown, fallback = 22) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Fetch all nodes from Supabase (includes credential for SSH use). */
-async function readNodesFromSupabase(): Promise<NodeRecord[]> {
-  const { data, error } = await supabaseAdmin
-    .from('nodes')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('[DB] Failed to read nodes:', error.message);
+/** Fetch all nodes from PostgreSQL (includes credential for SSH use). */
+async function readNodesFromDB(): Promise<NodeRecord[]> {
+  try {
+    const { rows } = await pool.query('SELECT * FROM nodes ORDER BY created_at DESC');
+    return rows.map((row: any) => ({
+      id:           row.id,
+      displayName:  row.display_name,
+      ipAddress:    row.ip_address,
+      username:     row.username,
+      port:         row.port ?? 22,
+      authType:     row.auth_type as 'password' | 'privateKey',
+      credential:   (() => { try { return decryptCredential(row.credential); } catch { return row.credential; } })(),
+      region:       row.region ?? 'US-East-1',
+      status:       row.status ?? 'connecting',
+      createdAt:    row.created_at,
+      updatedAt:    row.updated_at,
+      uptimeOutput: row.uptime_output ?? undefined,
+      error:        row.error ?? undefined,
+    }));
+  } catch (err: any) {
+    console.error('[DB] Failed to read nodes:', err.message);
     return [];
   }
-  return (data ?? []).map((row: any) => ({
-    id:           row.id,
-    displayName:  row.display_name,
-    ipAddress:    row.ip_address,
-    username:     row.username,
-    port:         row.port ?? 22,
-    authType:     row.auth_type as 'password' | 'privateKey',
-    // Decrypt credential in backend memory — never sent to frontend
-    credential:   (() => { try { return decryptCredential(row.credential); } catch { return row.credential; } })(),
-    region:       row.region ?? 'US-East-1',
-    status:       row.status ?? 'connecting',
-    createdAt:    row.created_at,
-    updatedAt:    row.updated_at,
-    uptimeOutput: row.uptime_output ?? undefined,
-    error:        row.error ?? undefined,
-  }));
 }
 
 function sanitizePrivateKey(input: string) {
@@ -716,7 +723,7 @@ interface AuthedRequest extends express.Request {
   userRole?: string;
 }
 
-async function verifyToken(
+function verifyToken(
   req: AuthedRequest,
   res: express.Response,
   next: express.NextFunction
@@ -729,22 +736,12 @@ async function verifyToken(
   }
 
   try {
-    // Verify JWT with Supabase
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !user) return res.status(401).json({ message: 'Invalid or expired token' });
-
-    // Fetch role from profiles table
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    req.userId   = user.id;
-    req.userRole = profile?.role ?? 'intern';
+    const payload = verifyJwt(token);
+    req.userId   = payload.id;
+    req.userRole = payload.role;
     next();
   } catch {
-    return res.status(401).json({ message: 'Auth error' });
+    return res.status(401).json({ message: 'Invalid or expired token' });
   }
 }
 
@@ -765,18 +762,84 @@ app.use((req, _res, next) => {
 });
 
 // --------------------------------------------------
-// API — Node Actions (reboot only)
+// AUTH routes (public — no verifyToken)
+// --------------------------------------------------
+
+/** POST /api/auth/login */
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body as { email: string; password: string };
+    if (!email || !password) return res.status(400).json({ message: 'email and password are required' });
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [email.toLowerCase().trim()]);
+    const user = rows[0];
+    if (!user) return res.status(401).json({ message: 'Invalid email or password' });
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) return res.status(401).json({ message: 'Invalid email or password' });
+
+    const token = signToken({ id: user.id, email: user.email, role: user.role });
+    return res.json({ token, role: user.role, id: user.id, email: user.email });
+  } catch (err: any) {
+    console.error('[AUTH] login error:', err.message);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** POST /api/auth/signup  (admin only — protected) */
+app.post('/api/auth/signup', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { email, password, role } = req.body as { email: string; password: string; role: string };
+    if (!email || !password || !role) return res.status(400).json({ message: 'email, password, and role are required' });
+    if (!['admin', 'employee', 'intern'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
+
+    const hash = await bcrypt.hash(password, 12);
+    const { rows } = await pool.query(
+      'INSERT INTO users (email, password_hash, role, created_by) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
+      [email.toLowerCase().trim(), hash, role, req.userId]
+    );
+    return res.status(201).json(rows[0]);
+  } catch (err: any) {
+    if (err.code === '23505') return res.status(409).json({ message: 'Email already exists' });
+    console.error('[AUTH] signup error:', err.message);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** POST /api/auth/change-password */
+app.post('/api/auth/change-password', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body as { currentPassword: string; newPassword: string };
+    if (!currentPassword || !newPassword) return res.status(400).json({ message: 'currentPassword and newPassword are required' });
+    if (newPassword.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
+
+    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.userId]);
+    if (!rows[0]) return res.status(404).json({ message: 'User not found' });
+
+    const match = await bcrypt.compare(currentPassword, rows[0].password_hash);
+    if (!match) return res.status(401).json({ message: 'Current password is incorrect' });
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, req.userId]);
+    return res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err: any) {
+    console.error('[AUTH] change-password error:', err.message);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // --------------------------------------------------
 app.post('/api/nodes/:id/reboot', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const { id } = req.params;
-    const { data: nodeRow, error: nodeErr } = await supabaseAdmin
-      .from('nodes').select('*').eq('id', id).single();
-    if (nodeErr || !nodeRow) return res.status(404).json({ message: 'Node not found' });
+    const { rows: _rebootRows } = await pool.query('SELECT * FROM nodes WHERE id = $1', [id]);
+    const nodeRow = _rebootRows[0];
+    if (!nodeRow) return res.status(404).json({ message: 'Node not found' });
     const node: NodeRecord = {
       id: nodeRow.id, displayName: nodeRow.display_name, ipAddress: nodeRow.ip_address,
       username: nodeRow.username, port: nodeRow.port, authType: nodeRow.auth_type,
-      credential: nodeRow.credential, region: nodeRow.region, status: nodeRow.status,
+      credential: (() => { try { return decryptCredential(nodeRow.credential); } catch { return nodeRow.credential; } })(),
+      region: nodeRow.region, status: nodeRow.status,
       createdAt: nodeRow.created_at, updatedAt: nodeRow.updated_at,
     };
 
@@ -794,38 +857,30 @@ app.get('/api/status', (_req, res) => {
 });
 
 // --------------------------------------------------
-// Profile endpoint — always uses service role, bypasses RLS
+// Profile endpoint
 // --------------------------------------------------
 app.get('/api/profile', verifyToken, async (req: AuthedRequest, res) => {
   try {
-    const { data: profile, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.userId!)
-      .single();
-
-    if (error || !profile) {
-      return res.status(404).json({ message: 'Profile not found' });
-    }
-
-    return res.json(profile);
+    const { rows } = await pool.query(
+      'SELECT id, email, role, created_by, created_at FROM users WHERE id = $1',
+      [req.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Profile not found' });
+    return res.json(rows[0]);
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
 });
 
 // --------------------------------------------------
-// Admin-only: fetch ALL profiles (service role — bypasses RLS)
+// Admin-only: fetch ALL users
 // --------------------------------------------------
-app.get('/api/admin/users', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
+app.get('/api/admin/users', verifyToken, requireRole('admin'), async (_req: AuthedRequest, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .order('created_at', { ascending: true });
-
-    if (error) return res.status(500).json({ message: error.message });
-    return res.json(data ?? []);
+    const { rows } = await pool.query(
+      'SELECT id, email, role, created_by, created_at FROM users ORDER BY created_at ASC'
+    );
+    return res.json(rows);
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -834,77 +889,40 @@ app.get('/api/admin/users', verifyToken, requireRole('admin'), async (req: Authe
 // --------------------------------------------------
 // BULK sync node assignments for a user (admin/employee)
 // Body: { userId: string, nodeIds: string[] }
-// Algorithm: delete-all then insert-valid-new
-// Uses supabaseAdmin (service role key) — bypasses RLS.
 // --------------------------------------------------
 app.post('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const { userId, nodeIds } = req.body as { userId: string; nodeIds: string[] };
 
-    // ── Input validation ──────────────────────────────────────────────────
-    if (!userId || typeof userId !== 'string') {
-      return res.status(400).json({ message: 'userId is required and must be a string' });
-    }
-    if (!Array.isArray(nodeIds)) {
-      return res.status(400).json({ message: 'nodeIds must be an array' });
-    }
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'userId is required' });
+    if (!Array.isArray(nodeIds)) return res.status(400).json({ message: 'nodeIds must be an array' });
 
-    // ── Validate nodeIds against Supabase nodes table ────────────────────
-    const { data: knownNodesData } = await supabaseAdmin.from('nodes').select('id');
-    const knownIds    = new Set((knownNodesData ?? []).map((n: any) => n.id));
+    const { rows: knownRows } = await pool.query('SELECT id FROM nodes');
+    const knownIds    = new Set(knownRows.map((n: any) => n.id));
     const validIds    = nodeIds.filter(id => knownIds.has(id));
     const rejectedIds = nodeIds.filter(id => !knownIds.has(id));
 
-    console.log('[ASSIGN] userId :', userId);
-    console.log('[ASSIGN] requested nodeIds :', nodeIds);
-    console.log('[ASSIGN] valid nodeIds     :', validIds);
-    if (rejectedIds.length > 0) {
-      console.warn('[ASSIGN] ⚠ rejected unknown node IDs:', rejectedIds);
-    }
+    if (rejectedIds.length > 0) console.warn('[ASSIGN] rejected unknown node IDs:', rejectedIds);
 
-    // ── Step 1: Delete all existing assignments for this user ─────────────
-    const { error: delError } = await supabaseAdmin
-      .from('node_assignments')
-      .delete()
-      .eq('user_id', userId);
-
-    if (delError) {
-      console.error('[ASSIGN] Delete failed:', delError.message);
-      return res.status(500).json({ message: `Delete failed: ${delError.message}` });
-    }
+    await pool.query('DELETE FROM node_assignments WHERE user_id = $1', [userId]);
     console.log('[ASSIGN] Cleared existing assignments for user', userId);
 
-    // ── Step 2: Insert each valid nodeId individually ─────────────────────
     const insertErrors: string[] = [];
     for (const node_id of validIds) {
-      const { error: insError } = await supabaseAdmin
-        .from('node_assignments')
-        .insert({ user_id: userId, node_id, created_by: req.userId });
-
-      if (insError) {
-        console.error(`[ASSIGN] Insert failed for node ${node_id}:`, insError.message);
-        insertErrors.push(`${node_id}: ${insError.message}`);
-      } else {
+      try {
+        await pool.query(
+          'INSERT INTO node_assignments (user_id, node_id, created_by) VALUES ($1, $2, $3) ON CONFLICT (user_id, node_id) DO NOTHING',
+          [userId, node_id, req.userId]
+        );
         console.log(`[ASSIGN] ✓ Assigned node ${node_id} → user ${userId}`);
+      } catch (e: any) {
+        insertErrors.push(`${node_id}: ${e.message}`);
       }
     }
 
-    if (insertErrors.length > 0) {
-      return res.status(207).json({
-        success: false,
-        assigned: validIds.length - insertErrors.length,
-        errors: insertErrors,
-        message: `${insertErrors.length} insert(s) failed. See errors array.`,
-      });
-    }
-
-    return res.json({
-      success:  true,
-      assigned: validIds.length,
-      rejected: rejectedIds,
-    });
+    if (insertErrors.length > 0) return res.status(207).json({ success: false, assigned: validIds.length - insertErrors.length, errors: insertErrors });
+    return res.json({ success: true, assigned: validIds.length, rejected: rejectedIds });
   } catch (err: any) {
-    console.error('[ASSIGN] Unexpected error:', err);
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
 });
@@ -915,17 +933,8 @@ app.post('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee')
 app.delete('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
     const { user_id, node_id } = req.body as { user_id: string; node_id: string };
-
-    if (!user_id || !node_id) {
-      return res.status(400).json({ message: 'user_id and node_id are required' });
-    }
-
-    const { error } = await supabaseAdmin
-      .from('node_assignments')
-      .delete()
-      .match({ user_id, node_id });
-
-    if (error) return res.status(500).json({ message: error.message });
+    if (!user_id || !node_id) return res.status(400).json({ message: 'user_id and node_id are required' });
+    await pool.query('DELETE FROM node_assignments WHERE user_id = $1 AND node_id = $2', [user_id, node_id]);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
@@ -936,42 +945,23 @@ app.delete('/api/admin/assign-node', verifyToken, requireRole('admin', 'employee
 
 app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
   try {
-    if (req.userRole === 'admin') {
-      // Admins see all nodes
-      const { data, error } = await supabaseAdmin
-        .from('nodes')
-        .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
-        .order('created_at', { ascending: false });
-      if (error) return res.status(500).json({ message: error.message });
-      return res.json((data ?? []).map((row: any) => ({
-        id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
-        username: row.username, port: row.port, authType: row.auth_type,
-        region: row.region, status: row.status, uptimeOutput: row.uptime_output,
-        error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
-      })));
-    }
-
-    // Employees/Interns: only nodes assigned to them
-    const { data: assignments } = await supabaseAdmin
-      .from('node_assignments')
-      .select('node_id')
-      .eq('user_id', req.userId!);
-    const assignedIds = (assignments ?? []).map((a: any) => a.node_id);
-
-    if (assignedIds.length === 0) return res.json([]);
-
-    const { data, error } = await supabaseAdmin
-      .from('nodes')
-      .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
-      .in('id', assignedIds)
-      .order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ message: error.message });
-    return res.json((data ?? []).map((row: any) => ({
+    const mapRow = (row: any) => ({
       id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
       username: row.username, port: row.port, authType: row.auth_type,
       region: row.region, status: row.status, uptimeOutput: row.uptime_output,
       error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
-    })));
+    });
+    if (req.userRole === 'admin') {
+      const { rows } = await pool.query(
+        'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes ORDER BY created_at DESC'
+      );
+      return res.json(rows.map(mapRow));
+    }
+    const { rows } = await pool.query(
+      'SELECT n.id,n.display_name,n.ip_address,n.username,n.port,n.auth_type,n.region,n.status,n.uptime_output,n.error,n.created_at,n.updated_at FROM nodes n WHERE n.id IN (SELECT node_id FROM node_assignments WHERE user_id = $1) ORDER BY n.created_at DESC',
+      [req.userId]
+    );
+    return res.json(rows.map(mapRow));
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -979,13 +969,12 @@ app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
 
 app.get('/api/nodes/:id', verifyToken, async (req: AuthedRequest, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('nodes')
-      .select('id, display_name, ip_address, username, port, auth_type, region, status, uptime_output, error, created_at, updated_at')
-      .eq('id', req.params.id)
-      .single();
-    if (error || !data) return res.status(404).json({ message: 'Node not found' });
-    const row = data as any;
+    const { rows } = await pool.query(
+      'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes WHERE id = $1',
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Node not found' });
+    const row = rows[0];
     return res.json({
       id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
       username: row.username, port: row.port, authType: row.auth_type,
@@ -1055,36 +1044,26 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req
     // Encrypt credential before persisting
     const encryptedCredential = isEncrypted(credential) ? credential : encryptCredential(credential);
 
-    // INSERT into Supabase
-    const { data: inserted, error: insertErr } = await supabaseAdmin
-      .from('nodes')
-      .insert({
-        display_name: displayName,
-        ip_address:   ipAddress,
-        username,
-        port,
-        auth_type:    authType,
-        credential:   encryptedCredential,
-        region,
-        status:       'connecting',
-        created_by:   req.userId,
-      })
-      .select('id, display_name, ip_address, username, port, auth_type, region, status, created_at, updated_at')
-      .single();
-
-    if (insertErr || !inserted) {
-      return res.status(500).json({ success: false, message: insertErr?.message || 'Failed to create node' });
+    // INSERT into PostgreSQL
+    const { rows: insertedRows } = await pool.query(
+      `INSERT INTO nodes (display_name,ip_address,username,port,auth_type,credential,region,status,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'connecting',$8)
+       RETURNING id,display_name,ip_address,username,port,auth_type,region,status,created_at,updated_at`,
+      [displayName, ipAddress, username, port, authType, encryptedCredential, region, req.userId]
+    );
+    if (!insertedRows[0]) {
+      return res.status(500).json({ success: false, message: 'Failed to create node' });
     }
-
-    const row = inserted as any;
+    const row = insertedRows[0];
     const nodeId = row.id as string;
 
     // Auto-assign to the creator
     void (async () => {
       try {
-        await supabaseAdmin
-          .from('node_assignments')
-          .upsert({ user_id: req.userId!, node_id: nodeId, created_by: req.userId }, { onConflict: 'user_id,node_id' });
+        await pool.query(
+          'INSERT INTO node_assignments (user_id,node_id,created_by) VALUES ($1,$2,$3) ON CONFLICT (user_id,node_id) DO NOTHING',
+          [req.userId, nodeId, req.userId]
+        );
         console.log(`[NODE] Auto-assigned node ${nodeId} → creator ${req.userId}`);
       } catch (e: any) {
         console.warn('[NODE] Auto-assign failed:', e?.message);
@@ -1099,16 +1078,14 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req
     };
     res.status(201).json(safe);
 
-    // Background SSH test → update Supabase
+    // Background SSH test → update PostgreSQL
     const nodeForSSH: NodeRecord = { ...safe, credential, status: 'connecting', updatedAt: nowIso(), createdAt: nowIso() };
     void testSSH(nodeForSSH).then(async (result) => {
       try {
-        await supabaseAdmin.from('nodes').update({
-          status:        result.success ? 'online' : 'offline',
-          uptime_output: result.uptimeOutput ?? null,
-          error:         result.success ? null : result.message,
-          updated_at:    nowIso(),
-        }).eq('id', nodeId);
+        await pool.query(
+          'UPDATE nodes SET status=$1,uptime_output=$2,error=$3,updated_at=$4 WHERE id=$5',
+          [result.success ? 'online' : 'offline', result.uptimeOutput ?? null, result.success ? null : result.message, nowIso(), nodeId]
+        );
         console.log(`[BG-SSH] '${displayName}' → ${result.success ? 'online' : 'offline'}${result.success ? '' : ` | ${result.message}`}`);
       } catch {}
     });
@@ -1122,11 +1099,9 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
     const nodeId = req.params.id;
 
     // Fetch existing to get current credential if not replaced
-    const { data: existing, error: fetchErr } = await supabaseAdmin
-      .from('nodes').select('*').eq('id', nodeId).single();
-    if (fetchErr || !existing) return res.status(404).json({ message: 'Node not found' });
-
-    const old = existing as any;
+    const { rows: existingRows } = await pool.query('SELECT * FROM nodes WHERE id = $1', [nodeId]);
+    if (!existingRows[0]) return res.status(404).json({ message: 'Node not found' });
+    const old = existingRows[0];
     const newDisplayName = safeStr(req.body?.displayName ?? old.display_name);
     const newIp          = safeStr(req.body?.ipAddress   ?? old.ip_address);
     const newUsername    = safeStr(req.body?.username    ?? old.username);
@@ -1155,8 +1130,12 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
       updates.credential = isEncrypted(raw) ? raw : encryptCredential(raw);
     }
 
-    const { error: updErr } = await supabaseAdmin.from('nodes').update(updates).eq('id', nodeId);
-    if (updErr) return res.status(500).json({ message: updErr.message });
+    await pool.query(
+      `UPDATE nodes SET display_name=$1,ip_address=$2,username=$3,port=$4,auth_type=$5,region=$6,status=$7,updated_at=$8${updates.credential ? ',credential=$9' : ''} WHERE id=${updates.credential ? '$10' : '$9'}`,
+      updates.credential
+        ? [updates.display_name,updates.ip_address,updates.username,updates.port,updates.auth_type,updates.region,updates.status,updates.updated_at,updates.credential,nodeId]
+        : [updates.display_name,updates.ip_address,updates.username,updates.port,updates.auth_type,updates.region,updates.status,updates.updated_at,nodeId]
+    );
 
     res.json({ id: nodeId, ...updates, displayName: updates.display_name, ipAddress: updates.ip_address, authType: updates.auth_type });
 
@@ -1169,12 +1148,10 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
     };
     void testSSH(nodeForSSH).then(async result => {
       try {
-        await supabaseAdmin.from('nodes').update({
-          status:        result.success ? 'online' : 'offline',
-          uptime_output: result.uptimeOutput ?? null,
-          error:         result.success ? null : result.message,
-          updated_at:    nowIso(),
-        }).eq('id', nodeId);
+        await pool.query(
+          'UPDATE nodes SET status=$1,uptime_output=$2,error=$3,updated_at=$4 WHERE id=$5',
+          [result.success ? 'online' : 'offline', result.uptimeOutput ?? null, result.success ? null : result.message, nowIso(), nodeId]
+        );
         console.log(`[BG-SSH] Updated '${updates.display_name}' → ${result.success ? 'online' : 'offline'}`);
       } catch {}
     });
@@ -1185,8 +1162,7 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
 
 app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('nodes').delete().eq('id', req.params.id);
-    if (error) return res.status(500).json({ message: error.message });
+    await pool.query('DELETE FROM nodes WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err?.message || 'Server error' });
@@ -1212,40 +1188,15 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee'), asy
       return res.status(400).json({ message: 'email, password, and role are required' });
     }
 
-    // Create auth user
-    const { data: newUser, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { role },
-    });
-
-    if (createErr || !newUser?.user) {
-      return res.status(500).json({ message: createErr?.message || 'Failed to create user' });
-    }
-
-    // Upsert profile with role + created_by.
-    // IMPORTANT: treat a profile-write failure as fatal.
-    // If this step fails the auth user becomes an orphan (email "taken" but
-    // invisible in the UI), so we delete the auth user before returning an error.
-    const { error: profileErr } = await supabaseAdmin.from('profiles').upsert({
-      id: newUser.user.id,
-      email,
-      role,
-      created_by: created_by || req.userId,
-    });
-
-    if (profileErr) {
-      console.error('[CREATE-USER] Profile upsert failed — rolling back auth user:', profileErr.message);
-      // Roll back: remove the orphaned auth.users row so the email is freed
-      await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
-      return res.status(500).json({
-        message: `User created in Auth but profile write failed (rolled back): ${profileErr.message}`,
-      });
-    }
-
-    console.log(`[CREATE-USER] ✓ Auth + profile created for ${email} (role: ${role})`);
-    return res.status(201).json({ id: newUser.user.id, email, role });
+    // Hash password and insert into users table
+    const hash = await bcrypt.hash(password, 12);
+    const { rows: newUserRows } = await pool.query(
+      'INSERT INTO users (email, password_hash, role, created_by) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
+      [email.toLowerCase().trim(), hash, role, created_by || req.userId]
+    );
+    if (!newUserRows[0]) return res.status(500).json({ message: 'Failed to create user' });
+    console.log(`[CREATE-USER] ✓ Created ${email} (role: ${role})`);
+    return res.status(201).json(newUserRows[0]);
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -1257,19 +1208,12 @@ app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), asyn
 
     // Employees can only delete their own interns
     if (req.userRole === 'employee') {
-      const { data: target } = await supabaseAdmin
-        .from('profiles')
-        .select('created_by, role')
-        .eq('id', targetId)
-        .single();
-      if (!target || target.created_by !== req.userId || target.role !== 'intern') {
+      const { rows: tgt } = await pool.query('SELECT created_by, role FROM users WHERE id = $1', [targetId]);
+      if (!tgt[0] || tgt[0].created_by !== req.userId || tgt[0].role !== 'intern') {
         return res.status(403).json({ message: 'You can only delete interns you created' });
       }
     }
-
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
-    if (error) return res.status(500).json({ message: error.message });
-
+    await pool.query('DELETE FROM users WHERE id = $1', [targetId]);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
@@ -1281,13 +1225,11 @@ app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), asyn
 // --------------------------------------------------
 app.get('/api/users', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('created_by', req.userId!);
-
-    if (error) return res.status(500).json({ message: error.message });
-    return res.json(data ?? []);
+    const { rows } = await pool.query(
+      'SELECT id, email, role, created_by, created_at FROM users WHERE created_by = $1',
+      [req.userId]
+    );
+    return res.json(rows);
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -1304,23 +1246,11 @@ app.get('/api/users/:id/assignments', verifyToken, requireRole('admin', 'employe
 
     // Employees can only view assignments for their own interns
     if (req.userRole === 'employee') {
-      const { data: target } = await supabaseAdmin
-        .from('profiles')
-        .select('created_by')
-        .eq('id', targetId)
-        .single();
-      if (!target || target.created_by !== req.userId) {
-        return res.status(403).json({ message: 'Access denied' });
-      }
+      const { rows: tgt } = await pool.query('SELECT created_by FROM users WHERE id = $1', [targetId]);
+      if (!tgt[0] || tgt[0].created_by !== req.userId) return res.status(403).json({ message: 'Access denied' });
     }
-
-    const { data, error } = await supabaseAdmin
-      .from('node_assignments')
-      .select('node_id')
-      .eq('user_id', targetId);
-
-    if (error) return res.status(500).json({ message: error.message });
-    return res.json(data ?? []);
+    const { rows } = await pool.query('SELECT node_id FROM node_assignments WHERE user_id = $1', [targetId]);
+    return res.json(rows);
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -1336,32 +1266,15 @@ app.post('/api/users/:id/assign-node', verifyToken, requireRole('admin', 'employ
 
     // Employees can only assign nodes that are also assigned to themselves
     if (req.userRole === 'employee') {
-      const { data: myAssignment } = await supabaseAdmin
-        .from('node_assignments')
-        .select('node_id')
-        .eq('user_id', req.userId!)
-        .eq('node_id', node_id)
-        .single();
-      if (!myAssignment) {
-        return res.status(403).json({ message: 'You can only assign nodes that are assigned to you' });
-      }
-
-      // Also verify the intern was created by this employee
-      const { data: target } = await supabaseAdmin
-        .from('profiles')
-        .select('created_by')
-        .eq('id', targetId)
-        .single();
-      if (!target || target.created_by !== req.userId) {
-        return res.status(403).json({ message: 'Access denied' });
-      }
+      const { rows: myA } = await pool.query('SELECT node_id FROM node_assignments WHERE user_id=$1 AND node_id=$2', [req.userId, node_id]);
+      if (!myA[0]) return res.status(403).json({ message: 'You can only assign nodes that are assigned to you' });
+      const { rows: tgt } = await pool.query('SELECT created_by FROM users WHERE id = $1', [targetId]);
+      if (!tgt[0] || tgt[0].created_by !== req.userId) return res.status(403).json({ message: 'Access denied' });
     }
-
-    const { error } = await supabaseAdmin
-      .from('node_assignments')
-      .upsert({ user_id: targetId, node_id, created_by: req.userId }, { onConflict: 'user_id,node_id' });
-
-    if (error) return res.status(500).json({ message: error.message });
+    await pool.query(
+      'INSERT INTO node_assignments (user_id,node_id,created_by) VALUES ($1,$2,$3) ON CONFLICT (user_id,node_id) DO NOTHING',
+      [targetId, node_id, req.userId]
+    );
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
@@ -1376,22 +1289,10 @@ app.delete('/api/users/:id/assign-node/:nodeId', verifyToken, requireRole('admin
 
     // Employees can only unassign from their own interns
     if (req.userRole === 'employee') {
-      const { data: target } = await supabaseAdmin
-        .from('profiles')
-        .select('created_by')
-        .eq('id', targetId)
-        .single();
-      if (!target || target.created_by !== req.userId) {
-        return res.status(403).json({ message: 'Access denied' });
-      }
+      const { rows: tgt } = await pool.query('SELECT created_by FROM users WHERE id = $1', [targetId]);
+      if (!tgt[0] || tgt[0].created_by !== req.userId) return res.status(403).json({ message: 'Access denied' });
     }
-
-    const { error } = await supabaseAdmin
-      .from('node_assignments')
-      .delete()
-      .match({ user_id: targetId, node_id: nodeId });
-
-    if (error) return res.status(500).json({ message: error.message });
+    await pool.query('DELETE FROM node_assignments WHERE user_id=$1 AND node_id=$2', [targetId, nodeId]);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
@@ -1451,7 +1352,7 @@ terminalWss.on('connection', async (ws, req) => {
     return;
   }
 
-  // ── 2. Authenticate the user via Supabase JWT ──────────────────────
+  // ── 2. Authenticate via JWT ──────────────────────────────────────────
   if (!token) {
     ws.send('\r\n[terminal] Unauthorized: missing token\r\n');
     ws.close();
@@ -1461,12 +1362,9 @@ terminalWss.on('connection', async (ws, req) => {
   let wsUserId: string;
   let wsUserRole: string;
   try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !user) throw new Error('invalid token');
-    wsUserId = user.id;
-    const { data: profile } = await supabaseAdmin
-      .from('profiles').select('role').eq('id', user.id).single();
-    wsUserRole = profile?.role ?? 'intern';
+    const payload = verifyJwt(token);
+    wsUserId   = payload.id;
+    wsUserRole = payload.role;
   } catch {
     ws.send('\r\n[terminal] Unauthorized: invalid or expired token\r\n');
     ws.close();
@@ -1475,31 +1373,28 @@ terminalWss.on('connection', async (ws, req) => {
 
   // ── 3. Verify node assignment (non-admin must be explicitly assigned) ──
   if (wsUserRole !== 'admin') {
-    const { data: assignment } = await supabaseAdmin
-      .from('node_assignments')
-      .select('node_id')
-      .eq('user_id', wsUserId)
-      .eq('node_id', nodeId)
-      .single();
-    if (!assignment) {
+    const { rows: asgn } = await pool.query(
+      'SELECT node_id FROM node_assignments WHERE user_id=$1 AND node_id=$2',
+      [wsUserId, nodeId]
+    );
+    if (!asgn[0]) {
       ws.send('\r\n[terminal] Forbidden: you are not assigned to this node\r\n');
       ws.close();
       return;
     }
   }
 
-  // ── 4. Fetch node (credential decrypted by readNodesFromSupabase) ─────
-  const { data: nodeRow } = await supabaseAdmin
-    .from('nodes').select('*').eq('id', nodeId).single();
-  if (!nodeRow) {
+  // ── 4. Fetch node from PostgreSQL ─────────────────────────────────────
+  const { rows: nodeRows } = await pool.query('SELECT * FROM nodes WHERE id = $1', [nodeId]);
+  if (!nodeRows[0]) {
     ws.send('\r\n[terminal] Node not found\r\n');
     ws.close();
     return;
   }
+  const nodeRow = nodeRows[0];
   const node: NodeRecord = {
     id: nodeRow.id, displayName: nodeRow.display_name, ipAddress: nodeRow.ip_address,
     username: nodeRow.username, port: nodeRow.port, authType: nodeRow.auth_type,
-    // Decrypt credential in-memory for SSH — never forwarded to the client
     credential: (() => { try { return decryptCredential(nodeRow.credential); } catch { return nodeRow.credential; } })(),
     region: nodeRow.region, status: nodeRow.status,
     createdAt: nodeRow.created_at, updatedAt: nodeRow.updated_at,
@@ -1640,17 +1535,17 @@ async function pollNode(node: NodeRecord) {
       pollFailCount.set(node.id, fails);
 
       if (fails >= 3) {
-        void supabaseAdmin
-          .from('nodes')
-          .update({ status: 'offline', updated_at: metrics.timestamp, error: metrics.logs[0]?.message })
-          .eq('id', node.id);
+        void pool.query(
+        'UPDATE nodes SET status=$1,updated_at=$2,error=$3 WHERE id=$4',
+        ['offline', metrics.timestamp, metrics.logs[0]?.message ?? null, node.id]
+      );
       }
     } else {
       pollFailCount.set(node.id, 0);
-      void supabaseAdmin
-        .from('nodes')
-        .update({ status: metrics.status, updated_at: metrics.timestamp, error: null })
-        .eq('id', node.id);
+      void pool.query(
+        'UPDATE nodes SET status=$1,updated_at=$2,error=NULL WHERE id=$3',
+        [metrics.status, metrics.timestamp, node.id]
+      );
     }
 
     console.log(
@@ -1666,7 +1561,7 @@ async function pollNode(node: NodeRecord) {
 }
 
 async function pollAllNodes() {
-  const nodes = await readNodesFromSupabase();
+  const nodes = await readNodesFromDB();
   if (!nodes.length) return;
 
   console.log(`[POLL] Starting poll cycle — ${nodes.length} node(s)`);

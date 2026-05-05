@@ -338,7 +338,7 @@ function GallerySection() {
   );
 }
 
-function FaqItem({ q, a }: { q: string; a: string }) {
+function FaqItem({ q, a }: { q: string; a: string; key?: string | number }) {
   const [open, setOpen] = useState(false);
   return (
     <div
@@ -1225,7 +1225,7 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
               { q: 'Is my data secure?', a: 'All connections use AES-256 encrypted SSH2 tunnels. Credentials are encrypted at rest. Authentication is powered by Supabase with industry-standard JWT sessions.' },
               { q: 'Can I self-host MYACCESS?', a: 'Yes. MYACCESS ships with a Dockerfile and docker-compose configuration. Deploy it on your own infrastructure in minutes.' },
             ].map((item, i) => (
-              <FaqItem key={i} q={item.q} a={item.a} />
+              <FaqItem key={String(i)} q={item.q} a={item.a} />
             ))}
           </div>
         </div>

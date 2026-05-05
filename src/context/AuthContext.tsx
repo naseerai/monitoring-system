@@ -1,103 +1,88 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { supabase, type Profile } from '../lib/supabase';
-
-// ── Context shape ──────────────────────────────────────────────────────────
+import {
+  getToken, setToken, removeToken, decodeToken, isTokenExpired,
+  type UserRole, type Profile,
+} from '../lib/api';
 
 interface AuthState {
-  session:  Session | null;
-  user:     User    | null;
+  token:    string | null;
   profile:  Profile | null;
   loading:  boolean;
   signIn:   (email: string, password: string) => Promise<{ error: string | null }>;
-  signOut:  () => Promise<void>;
+  signOut:  () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
-// ── Provider ───────────────────────────────────────────────────────────────
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session,  setSession]  = useState<Session  | null>(null);
-  const [user,     setUser]     = useState<User     | null>(null);
-  const [profile,  setProfile]  = useState<Profile  | null>(null);
-  const [loading,  setLoading]  = useState(true);
+  const [token,   setTok]    = useState<string | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  /**
-   * Fetch profile from the backend /api/profile endpoint.
-   * The backend uses the service-role key, so it bypasses any RLS issues
-   * and always returns the real role from the database.
-   */
-  const fetchProfile = useCallback(async (token: string) => {
-    try {
-      const res = await fetch('/api/profile', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setProfile(data ?? null);
-      } else {
-        // Fallback: try Supabase direct (may hit RLS)
-        const { data } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', (await supabase.auth.getUser()).data.user?.id ?? '')
-          .single();
-        setProfile(data ?? null);
-      }
-    } catch {
-      setProfile(null);
-    }
+  const hydrateProfile = useCallback((tok: string) => {
+    const payload = decodeToken(tok);
+    if (!payload) return;
+    setProfile({ id: payload.id, email: payload.email, role: payload.role as UserRole, created_by: null, created_at: '' });
+    // fetch full profile from server for created_at / created_by
+    fetch('/api/profile', { headers: { Authorization: `Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setProfile(data as Profile); })
+      .catch(() => {});
   }, []);
 
-  // Initialise & subscribe
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      if (data.session?.user && data.session.access_token) {
-        fetchProfile(data.session.access_token).finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
+    const stored = getToken();
+    if (stored && !isTokenExpired(stored)) {
+      setTok(stored);
+      hydrateProfile(stored);
+    }
+    setLoading(false);
+  }, [hydrateProfile]);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess) => {
-      setSession(sess);
-      setUser(sess?.user ?? null);
-      if (sess?.user && sess.access_token) {
-        fetchProfile(sess.access_token);
-      } else {
-        setProfile(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [fetchProfile]);
-
-  const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error?.message ?? null };
+  const signIn = async (email: string, password: string): Promise<{ error: string | null }> => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { error: data.message || 'Login failed' };
+      const tok: string = data.token;
+      setToken(tok);
+      setTok(tok);
+      hydrateProfile(tok);
+      return { error: null };
+    } catch (e: any) {
+      return { error: e.message || 'Network error' };
+    }
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    setSession(null);
-    setUser(null);
+  const signOut = () => {
+    removeToken();
+    setTok(null);
     setProfile(null);
+    // Redirect to login page (hash-router picks this up in App.tsx)
+    window.location.hash = 'login';
   };
+
+  // Expose session-like shape so existing components still work
+  const session = token ? { access_token: token } : null;
 
   return (
-    <AuthContext.Provider value={{ session, user, profile, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ token, profile, loading, signIn, signOut } as any}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-// ── Hook ───────────────────────────────────────────────────────────────────
-
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>');
-  return ctx;
+  // Add session alias so components using session?.access_token still work
+  return {
+    ...ctx,
+    session: ctx.token ? { access_token: ctx.token } : null,
+    user: ctx.profile,
+  };
 }

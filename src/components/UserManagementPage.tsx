@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Plus, Trash2, Server, Shield, Search,
   ChevronDown, CheckCircle2, X, Loader2, AlertTriangle, UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import type { Profile, UserRole } from '../lib/supabase';
+import type { Profile, UserRole } from '../lib/api';
 
 interface NodeRecord { id: string; display_name: string; ip_address: string; status: string; }
 
@@ -302,9 +302,9 @@ function CreateUserModal({
 // ── Main Component ────────────────────────────────────────────────────────
 
 export default function UserManagementPage() {
-  const { profile: me, session } = useAuth();
+  const { profile: me, token: rawToken, session } = useAuth() as any;
   const isAdmin = me?.role === 'admin';
-  const token = session?.access_token ?? '';
+  const token: string = rawToken ?? session?.access_token ?? '';
   const creatableRole: UserRole = isAdmin ? 'employee' : 'intern';
 
   const [users,     setUsers]     = useState<Profile[]>([]);

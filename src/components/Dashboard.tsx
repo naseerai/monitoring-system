@@ -97,8 +97,9 @@ export default function Dashboard() {
   const [ramHist,  setRamHist]  = useState<ChartPoint[]>([]);
   const [netHist,  setNetHist]  = useState<NetPoint[]>([]);
 
-  const onlineNodes  = nodes.filter(n => n.status === 'online' || n.status === 'warning');
-  const currentNode  = onlineNodes[activeIndex] ?? null;
+  // Rotate through ALL registered nodes (show offline state too); metrics will be '—' when offline
+  const rotatingNodes = nodes;
+  const currentNode   = rotatingNodes[activeIndex] ?? null;
 
   // ── Fetch node list ──────────────────────────────────────────────────────
   const fetchNodes = useCallback(async () => {
@@ -122,31 +123,31 @@ export default function Dashboard() {
 
   // ── Rotation timer ───────────────────────────────────────────────────────
   const advanceNode = useCallback(() => {
-    setActiveIndex(prev => (onlineNodes.length > 1 ? (prev + 1) % onlineNodes.length : prev));
+    setActiveIndex(prev => (rotatingNodes.length > 1 ? (prev + 1) % rotatingNodes.length : prev));
     setCountdown(ROTATION_SECS);
     // Clear metrics for fresh slate on new node
     setMetrics(null);
     setCpuHist([]);
     setRamHist([]);
     setNetHist([]);
-  }, [onlineNodes.length]);
+  }, [rotatingNodes.length]);
 
   useEffect(() => {
-    if (onlineNodes.length <= 1) return;
+    if (rotatingNodes.length <= 1) return;
     rotationRef.current  = setInterval(advanceNode, ROTATION_SECS * 1000);
     countdownRef.current = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000);
     return () => {
       if (rotationRef.current)  clearInterval(rotationRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
     };
-  }, [advanceNode, onlineNodes.length]);
+  }, [advanceNode, rotatingNodes.length]);
 
   // Reset countdown when active node changes manually
   const manualNav = (dir: 'prev' | 'next') => {
-    if (onlineNodes.length === 0) return;
+    if (rotatingNodes.length === 0) return;
     setActiveIndex(prev => dir === 'next'
-      ? (prev + 1) % onlineNodes.length
-      : (prev - 1 + onlineNodes.length) % onlineNodes.length
+      ? (prev + 1) % rotatingNodes.length
+      : (prev - 1 + rotatingNodes.length) % rotatingNodes.length
     );
     setCountdown(ROTATION_SECS);
     setMetrics(null); setCpuHist([]); setRamHist([]); setNetHist([]);
@@ -215,7 +216,7 @@ export default function Dashboard() {
 
         <div className="flex items-center gap-4">
           {/* Node navigator */}
-          {onlineNodes.length > 1 && (
+          {rotatingNodes.length > 1 && (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => manualNav('prev')}
@@ -224,7 +225,7 @@ export default function Dashboard() {
                 <ChevronLeft size={16} />
               </button>
               <span className="text-xs font-mono text-gray-500">
-                {activeIndex + 1} / {onlineNodes.length}
+                {activeIndex + 1} / {rotatingNodes.length}
               </span>
               <button
                 onClick={() => manualNav('next')}
@@ -250,14 +251,20 @@ export default function Dashboard() {
 >
   <Sliders size={18} />
 </button>
-          <button className="bg-neon-lime text-black px-5 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-[#BDE600] transition-colors shadow-[0_0_16px_rgba(212,255,0,0.2)]">
-            <Rocket size={14} /> Deploy
+          <button
+            onClick={() => {
+              const btn = document.getElementById('btn-new-node');
+              if (btn) (btn as HTMLButtonElement).click();
+            }}
+            className="bg-neon-lime text-black px-5 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-[#BDE600] transition-colors shadow-[0_0_16px_rgba(212,255,0,0.2)]"
+          >
+            <Rocket size={14} /> Deploy New Node
           </button>
         </div>
       </header>
 
       {/* ── Rotation progress bar ──────────────────────────────────────── */}
-      {onlineNodes.length > 1 && (
+      {rotatingNodes.length > 1 && (
         <div className="mb-6">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] text-gray-600 font-mono uppercase tracking-wider">
@@ -276,16 +283,13 @@ export default function Dashboard() {
       )}
 
       {/* ── No nodes state ──────────────────────────────────────────────── */}
-      {onlineNodes.length === 0 && (
+      {nodes.length === 0 && (
         <div className="flex flex-col items-center justify-center h-64 text-center">
           <div className="w-16 h-16 rounded-full bg-[#1A1A1A] border border-[#2F2F2F] flex items-center justify-center mb-4">
             <Activity size={28} className="text-gray-600" />
           </div>
-          <p className="text-gray-400 font-bold mb-1">No nodes connected</p>
-          <p className="text-gray-600 text-sm">Add a node and wait for it to come online.</p>
-          <p className="text-gray-700 text-xs mt-2 font-mono">
-            {nodes.length > 0 ? `${nodes.length} node(s) found but offline` : 'No nodes registered'}
-          </p>
+          <p className="text-gray-400 font-bold mb-1">No nodes registered</p>
+          <p className="text-gray-600 text-sm">Click "Deploy New Node" to add your first server.</p>
         </div>
       )}
 
