@@ -131,9 +131,10 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
 
         {role === 'super_admin' && (
           <>
-            <NavItem icon={Crown}   label="Command Center"    active={activePage === 'super-admin'}   onClick={() => navigate('super-admin')}   collapsed={collapsed} />
-            <NavItem icon={Settings} label="System Management" active={activePage === 'system-management'} onClick={() => navigate('system-management')} collapsed={collapsed} />
-            <NavItem icon={Users}   label="All Users"          active={activePage === 'users'}         onClick={() => navigate('users')}          collapsed={collapsed} />
+            <NavItem icon={Crown}    label="Command Center"    active={activePage === 'super-admin'}      onClick={() => navigate('super-admin')}      collapsed={collapsed} />
+            <NavItem icon={Shield}   label="Admin Management"  active={activePage === 'system-management'} onClick={() => navigate('system-management')} collapsed={collapsed} />
+            <NavItem icon={Settings} label="System Settings"   active={activePage === 'system-settings'}  onClick={() => navigate('system-settings')}  collapsed={collapsed} />
+            <NavItem icon={Users}    label="All Users"          active={activePage === 'users'}            onClick={() => navigate('users')}            collapsed={collapsed} />
           </>
         )}
 

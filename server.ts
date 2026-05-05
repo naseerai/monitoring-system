@@ -5,13 +5,14 @@ import { NodeSSH } from 'node-ssh';
 import { Client } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.ts';
-import { sendWelcomeEmail } from './src/utils/mailer.ts';
+import { sendWelcomeEmail, sendTestEmail, testSmtpConnection, SmtpConfig } from './src/utils/mailer.ts';
 
 // --------------------------------------------------
 // Input Sanitization Helpers
@@ -58,6 +59,25 @@ function signToken(payload: { id: string; email: string; role: string }): string
 
 function verifyJwt(token: string): { id: string; email: string; role: string } {
   return (jwt as any).verify(token, JWT_SECRET) as any;
+}
+
+/**
+ * Generate a cryptographically secure temporary password.
+ * Avoids ambiguous chars (0/O, 1/l/I) so the password is readable in emails.
+ * Example output: "kPm3!vQn9"
+ */
+function generateTempPassword(): string {
+  const alpha   = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
+  const digits  = '23456789';
+  const special = '!@#$%&*';
+  const rand = (chars: string) => chars[crypto.randomInt(chars.length)];
+  return (
+    rand(alpha) + rand(alpha) + rand(alpha) +
+    rand(digits) +
+    rand(special) +
+    rand(alpha) + rand(alpha) + rand(alpha) +
+    rand(digits)
+  ); // 9 chars — always meets the 8-char minimum
 }
 
 // --------------------------------------------------
@@ -1174,20 +1194,48 @@ app.put('/api/super-admin/settings/:key', verifyToken, requireRole('super_admin'
   }
 });
 
-/** POST /api/super-admin/settings/smtp/test — verify SMTP connection */
-app.post('/api/super-admin/settings/smtp/test', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+/**
+ * POST /api/super-admin/settings/smtp/test
+ * Accepts an optional smtp body with current form values.
+ * Saves them to DB first (if provided), then sends a real test email
+ * to the authenticated superadmin's email address.
+ */
+app.post('/api/super-admin/settings/smtp/test', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
   try {
-    const { rows } = await pool.query("SELECT value FROM system_settings WHERE setting_key = 'smtp'");
-    if (!rows[0]) return res.status(404).json({ ok: false, error: 'SMTP not configured' });
-    const smtp = rows[0].value;
-    const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.default.createTransport({
-      host: smtp.host, port: smtp.port,
-      secure: smtp.port === 465,
-      auth: smtp.username ? { user: smtp.username, pass: smtp.password } : undefined,
-    } as any);
-    await transporter.verify();
-    return res.json({ ok: true, message: 'SMTP connection verified successfully' });
+    // 1. Use the body payload if the frontend sends current form values
+    let smtpFromBody: SmtpConfig | undefined;
+    if (req.body && req.body.host) {
+      smtpFromBody = req.body as SmtpConfig;
+      // Persist the config so the test uses exactly what the admin typed
+      const existing = await pool.query("SELECT value FROM system_settings WHERE setting_key = 'smtp'");
+      const existing_pw = existing.rows[0]?.value?.password ?? '';
+      // If password is masked placeholder, preserve the stored one
+      if (smtpFromBody.password === '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022') {
+        smtpFromBody.password = existing_pw;
+      }
+      await pool.query(
+        `INSERT INTO system_settings (setting_key, value, updated_at)
+         VALUES ('smtp', $1, NOW())
+         ON CONFLICT (setting_key) DO UPDATE SET value = $1, updated_at = NOW()`,
+        [smtpFromBody]
+      );
+      console.log('[SMTP-TEST] Saved current form values to DB before testing.');
+    }
+
+    // 2. Get the superadmin's email to send the test email to
+    const { rows: adminRows } = await pool.query(
+      'SELECT email FROM users WHERE id = $1', [req.userId]
+    );
+    const adminEmail = adminRows[0]?.email;
+    if (!adminEmail) return res.status(400).json({ ok: false, error: 'Could not determine your email address' });
+
+    // 3. Send test email
+    const result = await sendTestEmail(pool, adminEmail, smtpFromBody);
+    if (result.sent) {
+      return res.json({ ok: true, message: `Test email sent to ${adminEmail}` });
+    } else {
+      return res.json({ ok: false, error: result.error || 'Send failed' });
+    }
   } catch (err: any) {
     return res.status(200).json({ ok: false, error: err.message });
   }
@@ -1208,8 +1256,12 @@ app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'
     console.log(`[SUPER-ADMIN] Created new admin: ${email}`);
 
     // Auto-send welcome email (non-blocking)
-    void sendWelcomeEmail(pool, email.toLowerCase().trim(), password, `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`)
-      .catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
+    const cleanEmail = email.toLowerCase().trim();
+    void sendWelcomeEmail(
+      pool, cleanEmail, password,
+      `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`,
+      { fullName: cleanEmail.split('@')[0], role: 'admin' }
+    ).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
 
     return res.status(201).json(rows[0]);
   } catch (err: any) {
@@ -1557,20 +1609,19 @@ app.delete('/api/nodes/:id', verifyToken, requireRole('admin', 'super_admin'), a
 
 app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
-    const { email, password, role, created_by } = req.body as {
-      email: string; password: string; role: string; created_by: string;
+    const { email, role, created_by } = req.body as {
+      email: string; password?: string; role: string; created_by?: string;
     };
 
-    // Employees can only create interns; admins can create employee/intern; super_admin can create any
+    // Role-based restriction
     if (req.userRole === 'employee' && role !== 'intern') {
       return res.status(403).json({ message: 'Employees can only create intern accounts' });
     }
-
-    if (!email || !password || !role) {
-      return res.status(400).json({ message: 'email, password, and role are required' });
+    if (!email || !role) {
+      return res.status(400).json({ message: 'email and role are required' });
     }
 
-    // ── Quota check for admin/super_admin ─────────────────────────────────
+    // ── Quota check ───────────────────────────────────────────────────────────
     if (req.userRole === 'admin' || req.userRole === 'super_admin') {
       const { rows: qRows } = await pool.query(
         'SELECT user_limit, (SELECT COUNT(*) FROM users WHERE created_by = $1) AS current_count FROM users WHERE id = $1',
@@ -1578,22 +1629,37 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'sup
       );
       const q = qRows[0];
       if (q && Number(q.current_count) >= Number(q.user_limit)) {
-        return res.status(403).json({ message: `User quota exceeded. Limit: ${q.user_limit}. Contact your Super Admin to increase the limit.` });
+        return res.status(403).json({
+          message: `User quota exceeded (limit: ${q.user_limit}). Contact your Super Admin to raise the limit.`,
+        });
       }
     }
 
-    // Hash password and insert into users table
-    const hash = await bcrypt.hash(password, 12);
+    // Auto-generate a secure temp password if caller did not supply one
+    const plainPassword: string =
+      (req.body.password && String(req.body.password).trim().length >= 8)
+        ? String(req.body.password).trim()
+        : generateTempPassword();
+
+    // Hash and persist
+    const hash = await bcrypt.hash(plainPassword, 12);
     const { rows: newUserRows } = await pool.query(
       'INSERT INTO users (email, password_hash, role, created_by) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
       [email.toLowerCase().trim(), hash, role, created_by || req.userId]
     );
     if (!newUserRows[0]) return res.status(500).json({ message: 'Failed to create user' });
-    console.log(`[CREATE-USER] ✓ Created ${email} (role: ${role})`);
+    console.log(`[CREATE-USER] ✓ ${email} (${role}) — temp password generated server-side`);
 
-    // ── Auto-send welcome email (non-blocking) ─────────────────────────────
-    void sendWelcomeEmail(pool, email.toLowerCase().trim(), password, `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`)
-      .catch((e: any) => console.warn('[MAILER] Non-fatal error:', e?.message));
+    // ── Send welcome email with real login credentials ─────────────────────
+    const cleanEmail = email.toLowerCase().trim();
+    void sendWelcomeEmail(
+      pool, cleanEmail, plainPassword,
+      process.env.APP_URL || `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`,
+      { fullName: cleanEmail.split('@')[0], role }
+    ).then(r => {
+      if (r.sent) console.log(`[MAILER] ✓ Welcome email → ${cleanEmail}`);
+      else        console.warn(`[MAILER] ✗ Could not email ${cleanEmail}: ${r.error}`);
+    }).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
 
     return res.status(201).json(newUserRows[0]);
   } catch (err: any) {

@@ -22,6 +22,7 @@ interface PlatformStats {
   totalUsers: number;
   totalRequests: number;
   onlineNodes: number;
+  activeAdmins: number;
 }
 
 interface PlatformNode {
@@ -181,7 +182,7 @@ export default function SuperAdminDashboard() {
         {tab === 'overview' && (
           <div>
             {/* Stats grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
               {[
                 { label: 'Total Nodes', value: stats?.totalNodes ?? '—', icon: Server, color: '#DFFF00', bg: 'rgba(223,255,0,0.08)' },
                 { label: 'Online Nodes', value: stats?.onlineNodes ?? '—', icon: Activity, color: '#22c55e', bg: 'rgba(34,197,94,0.08)' },
@@ -196,6 +197,34 @@ export default function SuperAdminDashboard() {
                   <div style={{ fontSize: 11, color: '#555', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase' }}>{s.label}</div>
                 </div>
               ))}
+            </div>
+
+            {/* ── Global Health row ── */}
+            <div style={{ background: '#0c0c0c', border: '1px solid #1a1a1a', borderRadius: 14, padding: '20px 24px', marginBottom: 32, display: 'flex', alignItems: 'center', gap: 32, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Globe size={16} color="#DFFF00" />
+                <span style={{ fontSize: 12, color: '#666', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Global Health</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
+                <span style={{ fontSize: 13, color: '#aaa' }}>Active Admins:</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: '#00c8ff' }}>{stats?.activeAdmins ?? '—'}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#DFFF00', boxShadow: '0 0 8px #DFFF00' }} />
+                <span style={{ fontSize: 13, color: '#aaa' }}>System Load:</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: '#DFFF00' }}>
+                  {stats ? `${stats.onlineNodes}/${stats.totalNodes} online` : '—'}
+                </span>
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ height: 6, width: 120, background: '#1a1a1a', borderRadius: 999, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${stats && stats.totalNodes > 0 ? Math.round((stats.onlineNodes / stats.totalNodes) * 100) : 0}%`, background: '#22c55e', borderRadius: 999, transition: 'width 0.5s ease' }} />
+                </div>
+                <span style={{ fontSize: 11, color: '#555' }}>
+                  {stats && stats.totalNodes > 0 ? Math.round((stats.onlineNodes / stats.totalNodes) * 100) : 0}%
+                </span>
+              </div>
             </div>
 
             {/* Quick access tiles */}

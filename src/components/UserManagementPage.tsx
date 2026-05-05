@@ -216,7 +216,6 @@ function CreateUserModal({
   onCreated: () => void;
 }) {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,7 +227,7 @@ function CreateUserModal({
       const res = await fetch('/api/users/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ email, password, role: creatableRole, created_by: createdById }),
+        body: JSON.stringify({ email, role: creatableRole, created_by: createdById }),
       });
       
       const data = await res.json();
@@ -273,13 +272,12 @@ function CreateUserModal({
               className="w-full bg-[#0A0A0A] border border-[#2a2a2a] focus:border-neon-lime/50 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition-all placeholder-gray-600"
             />
           </div>
-          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">Temporary Password</label>
-            <input
-              type="password" required minLength={8} value={password} onChange={e => setPassword(e.target.value)}
-              placeholder="Min 8 characters"
-              className="w-full bg-[#0A0A0A] border border-[#2a2a2a] focus:border-neon-lime/50 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition-all placeholder-gray-600"
-            />
+          {/* Auto-password info */}
+          <div className="flex items-start gap-2.5 bg-[#DFFF00]/5 border border-[#DFFF00]/15 rounded-lg px-3.5 py-3">
+            <span className="text-[#DFFF00] mt-0.5 flex-shrink-0">✉</span>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              A secure temporary password will be <span className="text-[#DFFF00] font-semibold">auto-generated</span> and emailed to this address immediately after the account is created.
+            </p>
           </div>
           {error && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-xs text-red-400">
@@ -296,6 +294,93 @@ function CreateUserModal({
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ── Organizations View (super_admin only) ───────────────────────────────
+
+function OrgRow({ admin, token }: { admin: Profile; token: string }) {
+  const [open, setOpen] = useState(false);
+  const [subs, setSubs] = useState<Profile[]>([]);
+  const [loadingSubs, setLoadingSubs] = useState(false);
+
+  const loadSubs = useCallback(async () => {
+    if (subs.length > 0) return; // already loaded
+    setLoadingSubs(true);
+    try {
+      const r = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) {
+        const all: Profile[] = await r.json();
+        setSubs(all.filter(u => u.created_by === admin.id));
+      }
+    } catch { }
+    setLoadingSubs(false);
+  }, [admin.id, token, subs.length]);
+
+  const handleToggle = () => {
+    if (!open) loadSubs();
+    setOpen(v => !v);
+  };
+
+  return (
+    <div className="border border-[#1a1a1a] rounded-2xl bg-[#0a0a0a] overflow-hidden mb-2">
+      {/* Admin header row */}
+      <div
+        className="flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+        onClick={handleToggle}
+      >
+        <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold flex-shrink-0">
+          {admin.email[0]?.toUpperCase()}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-white truncate">{admin.email}</p>
+          <p className="text-xs text-gray-600">Admin · {new Date(admin.created_at ?? '').toLocaleDateString()}</p>
+        </div>
+        <RoleBadge role={admin.role} />
+        <span className="text-gray-600 ml-2">{open ? <ChevronDown size={14} /> : <ChevronDown size={14} style={{ transform: 'rotate(-90deg)' }} />}</span>
+      </div>
+
+      {/* Sub-users */}
+      {open && (
+        <div className="border-t border-[#1a1a1a] bg-[#060606]">
+          {loadingSubs ? (
+            <div className="flex items-center gap-2 px-6 py-4 text-gray-600 text-sm">
+              <Loader2 size={13} className="animate-spin" /> Loading…
+            </div>
+          ) : subs.length === 0 ? (
+            <p className="px-6 py-4 text-xs text-gray-600 italic">No sub-users created by this admin.</p>
+          ) : subs.map(sub => (
+            <div key={sub.id} className="flex items-center gap-4 px-8 py-3 border-b border-[#111] last:border-0 hover:bg-white/[0.01]">
+              <div className="w-7 h-7 rounded-full bg-neon-lime/10 border border-neon-lime/20 flex items-center justify-center text-[11px] font-bold text-neon-lime flex-shrink-0">
+                {sub.email[0]?.toUpperCase()}
+              </div>
+              <p className="text-xs text-white flex-1 truncate">{sub.email}</p>
+              <RoleBadge role={sub.role} />
+              <p className="text-[10px] text-gray-600 hidden sm:block">{new Date(sub.created_at ?? '').toLocaleDateString()}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrganizationsView({ users, token }: { users: Profile[]; token: string }) {
+  const admins = users.filter(u => u.role === 'admin');
+  return (
+    <div>
+      <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-4">
+        {admins.length} Organisation{admins.length !== 1 ? 's' : ''}
+      </p>
+      {admins.length === 0 ? (
+        <div className="text-center py-16 text-gray-600">
+          <Users size={28} className="mx-auto mb-3 opacity-30" />
+          <p className="text-sm">No admin accounts yet.</p>
+        </div>
+      ) : admins.map(admin => (
+        <OrgRow key={admin.id} admin={admin} token={token} />
+      ))}
     </div>
   );
 }
@@ -465,11 +550,15 @@ setAssignmentCounts(counts);
             ))}
           </div>
 
-          {/* Rows */}
+          {/* Rows / Organizations */}
           {loading ? (
             <div className="flex items-center justify-center py-16 gap-3 text-gray-600">
               <Loader2 size={18} className="animate-spin" />
-              <span className="text-sm">Loading operators…</span>
+              <span className="text-sm">Loading…</span>
+            </div>
+          ) : isSuperAdmin ? (
+            <div className="p-4">
+              <OrganizationsView users={users} token={token} />
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-2 text-gray-700">

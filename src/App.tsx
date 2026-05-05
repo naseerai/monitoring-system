@@ -12,9 +12,10 @@ import UserManagementPage from './components/UserManagementPage';
 import UserProfilePage from './components/UserProfilePage';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import SystemManagementPage from './components/SystemManagementPage';
+import SmtpSettingsPanel from './components/SmtpSettingsPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings' | 'super-admin' | 'system-management';
+type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings' | 'super-admin' | 'system-management' | 'system-settings';
 
 interface NodeRecord {
   id: string;
@@ -59,6 +60,7 @@ export default function App() {
       else if (hash === 'settings')           { setPage('settings');           setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'super-admin')        { setPage('super-admin');        setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'system-management')  { setPage('system-management');  setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'system-settings')    { setPage('system-settings');    setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'login')              { setShowLogin(true);  setPage('dashboard'); }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
@@ -158,6 +160,17 @@ export default function App() {
 
             {page === 'system-management' && role === 'super_admin' && (
               <SystemManagementPage />
+            )}
+
+            {page === 'system-settings' && role === 'super_admin' && (
+              <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-[#070707]">
+                <div className="mb-6">
+                  <p className="text-[10px] text-gray-600 uppercase tracking-[0.2em] font-bold mb-1">SUPER ADMIN</p>
+                  <h1 className="text-2xl font-extrabold text-white tracking-tight">System Settings</h1>
+                  <p className="text-sm text-gray-600 mt-1">SMTP configuration and email template editor.</p>
+                </div>
+                <SmtpSettingsPanel />
+              </div>
             )}
 
             {page === 'profile' && (
