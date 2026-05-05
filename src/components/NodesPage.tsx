@@ -39,7 +39,7 @@ interface NodeMetrics {
 interface Props {
   onViewDetails: (id: string) => void;
   onOpenTerminalPage?: (nodeId: string, nodeName: string) => void;
-  role?: 'admin' | 'employee' | 'intern';
+  role?: 'super_admin' | 'admin' | 'employee' | 'intern';
 }
 
 type Filter = 'ALL' | 'ONLINE' | 'OFFLINE' | 'WARNING';

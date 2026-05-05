@@ -71,7 +71,7 @@ interface Props {
   nodeId: string;
   onBack: () => void;
   onOpenTerminalPage?: (nodeId: string, nodeName: string) => void;
-  role?: 'admin' | 'employee' | 'intern';
+  role?: 'super_admin' | 'admin' | 'employee' | 'intern';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

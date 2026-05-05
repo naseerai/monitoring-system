@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield, Activity, Server, Terminal, Lock, CheckCircle,
   ChevronRight, ChevronLeft, ChevronDown, Menu, X, Wifi, Box, Cpu, Database, ArrowRight, ZoomIn, Maximize2
@@ -358,7 +358,189 @@ function FaqItem({ q, a }: { q: string; a: string; key?: string | number }) {
   );
 }
 
+function RequestAccessSection() {
+  const [form, setForm] = useState({
+    fullName: '', email: '', companyName: '', serverCount: '', message: '',
+  });
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [msg, setMsg] = useState('');
+
+  const update = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus('loading');
+    try {
+      const r = await fetch('/api/public/request-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: form.fullName,
+          email: form.email,
+          companyName: form.companyName,
+          serverCount: Number(form.serverCount) || 0,
+          message: form.message,
+        }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        setStatus('success');
+        setMsg(data.message || 'Request submitted successfully!');
+        setForm({ fullName: '', email: '', companyName: '', serverCount: '', message: '' });
+      } else {
+        setStatus('error');
+        setMsg(data.message || 'Something went wrong. Please try again.');
+      }
+    } catch {
+      setStatus('error');
+      setMsg('Network error. Please try again.');
+    }
+  };
+
+  return (
+    <section id="request-access" style={{ padding: '100px 24px', position: 'relative' }}>
+      <style>{`
+        .ra-input {
+          width: 100%; background: rgba(255,255,255,0.04); border: 1px solid #222;
+          color: #fff; border-radius: 12px; padding: 14px 18px; font-size: 14px;
+          font-family: 'Space Grotesk', sans-serif; outline: none;
+          transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+          box-sizing: border-box; resize: vertical;
+        }
+        .ra-input::placeholder { color: #444; }
+        .ra-input:focus {
+          border-color: rgba(223,255,0,0.5);
+          box-shadow: 0 0 0 3px rgba(223,255,0,0.08), 0 0 20px rgba(223,255,0,0.06);
+          background: rgba(223,255,0,0.03);
+        }
+        .ra-label {
+          display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+          color: #555; text-transform: uppercase; margin-bottom: 8px;
+        }
+        .ra-grid {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+        @media(max-width: 600px) { .ra-grid { grid-template-columns: 1fr; } }
+        .ra-btn {
+          width: 100%; background: #DFFF00; color: #000; font-weight: 800; font-size: 15px;
+          font-family: 'Space Grotesk', sans-serif; border: none; border-radius: 12px;
+          padding: 16px; cursor: pointer; letter-spacing: 0.04em;
+          transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+          display: flex; align-items: center; justify-content: center; gap: 10px;
+        }
+        .ra-btn:hover:not(:disabled) { background: #c8e600; box-shadow: 0 0 30px rgba(223,255,0,0.35); transform: translateY(-1px); }
+        .ra-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+      `}</style>
+
+      <div style={{ maxWidth: 780, margin: '0 auto' }}>
+        {/* Section header */}
+        <div style={{ textAlign: 'center', marginBottom: 56 }}>
+          <p style={{ fontSize: 11, color: '#DFFF00', letterSpacing: '0.2em', fontWeight: 600, marginBottom: 12 }}>EARLY ACCESS</p>
+          <h2 style={{ fontSize: 'clamp(28px,4vw,44px)', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 14 }}>
+            Request Access
+          </h2>
+          <p style={{ fontSize: 16, color: '#666', lineHeight: 1.7, maxWidth: 520, margin: '0 auto' }}>
+            Interested in a private deployment? Tell us about your infrastructure — our team will reach out within 24 hours.
+          </p>
+        </div>
+
+        {/* Form card */}
+        <div style={{
+          background: 'linear-gradient(180deg, #0d0d0d 0%, #080808 100%)',
+          border: '1px solid #1e1e1e', borderRadius: 24, padding: 'clamp(28px,5vw,52px)',
+          position: 'relative', overflow: 'hidden',
+          boxShadow: '0 0 60px rgba(223,255,0,0.05)',
+        }}>
+          {/* Neon glow orb inside card */}
+          <div style={{ position: 'absolute', top: -60, right: -60, width: 300, height: 300, background: 'radial-gradient(circle, rgba(223,255,0,0.04) 0%, transparent 70%)', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', bottom: -40, left: -40, width: 200, height: 200, background: 'radial-gradient(circle, rgba(0,200,255,0.04) 0%, transparent 70%)', pointerEvents: 'none' }} />
+
+          {status === 'success' ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                <span style={{ fontSize: 28 }}>✓</span>
+              </div>
+              <h3 style={{ fontSize: 22, fontWeight: 800, color: '#22c55e', marginBottom: 10 }}>Request Received!</h3>
+              <p style={{ fontSize: 15, color: '#666', lineHeight: 1.7 }}>{msg}</p>
+              <button
+                onClick={() => setStatus('idle')}
+                style={{ marginTop: 24, background: 'none', border: '1px solid #2a2a2a', color: '#aaa', borderRadius: 10, padding: '10px 24px', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', transition: 'all 0.2s' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = '#DFFF00'; e.currentTarget.style.color = '#DFFF00'; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = '#2a2a2a'; e.currentTarget.style.color = '#aaa'; }}
+              >
+                Submit another request
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} style={{ position: 'relative' }}>
+              <div className="ra-grid" style={{ marginBottom: 16 }}>
+                <div>
+                  <label className="ra-label" htmlFor="ra-fullname">Full Name</label>
+                  <input id="ra-fullname" className="ra-input" type="text" required placeholder="Alex Thomson" value={form.fullName} onChange={update('fullName')} />
+                </div>
+                <div>
+                  <label className="ra-label" htmlFor="ra-email">Work Email</label>
+                  <input id="ra-email" className="ra-input" type="email" required placeholder="alex@company.com" value={form.email} onChange={update('email')} />
+                </div>
+              </div>
+
+              <div className="ra-grid" style={{ marginBottom: 16 }}>
+                <div>
+                  <label className="ra-label" htmlFor="ra-company">Company Name</label>
+                  <input id="ra-company" className="ra-input" type="text" required placeholder="Acme Infrastructure Inc." value={form.companyName} onChange={update('companyName')} />
+                </div>
+                <div>
+                  <label className="ra-label" htmlFor="ra-servercount">Estimated Server Count</label>
+                  <select id="ra-servercount" className="ra-input" value={form.serverCount} onChange={update('serverCount') as any} style={{ appearance: 'none', cursor: 'pointer' }}>
+                    <option value="" disabled>Select range…</option>
+                    {[['1', '1–5 servers'], ['10', '6–20 servers'], ['25', '21–50 servers'], ['75', '51–100 servers'], ['150', '100–200 servers'], ['500', '200+ servers']].map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 24 }}>
+                <label className="ra-label" htmlFor="ra-message">Message (Optional)</label>
+                <textarea
+                  id="ra-message"
+                  className="ra-input"
+                  rows={4}
+                  placeholder="Tell us about your infrastructure, use case, or any specific requirements…"
+                  value={form.message}
+                  onChange={update('message')}
+                />
+              </div>
+
+              {status === 'error' && (
+                <div style={{ marginBottom: 16, padding: '12px 16px', borderRadius: 10, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}>
+                  <span style={{ fontSize: 13, color: '#ef4444' }}>{msg}</span>
+                </div>
+              )}
+
+              <button type="submit" className="ra-btn" disabled={status === 'loading'}>
+                {status === 'loading' ? (
+                  <>
+                    <span style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid rgba(0,0,0,0.2)', borderTopColor: '#000', animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
+                    Sending Request…
+                  </>
+                ) : 'Request Private Access'}
+              </button>
+
+              <p style={{ marginTop: 16, textAlign: 'center', fontSize: 12, color: '#444' }}>
+                No spam — we'll only use your details to follow up on your request.
+              </p>
+            </form>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function LandingPage({ onNavigateToLogin }: Props) {
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
@@ -1209,6 +1391,9 @@ export default function LandingPage({ onNavigateToLogin }: Props) {
           </div>
         </div>
       </section>
+
+      {/* ── REQUEST ACCESS ──────────────────────────────────────────────────── */}
+      <RequestAccessSection />
 
       {/* ── FAQ ────────────────────────────────────────────────────────────── */}
       <section style={{ padding: '80px 24px 100px' }}>

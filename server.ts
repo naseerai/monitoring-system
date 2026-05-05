@@ -754,6 +754,10 @@ function requireRole(...roles: string[]) {
   };
 }
 
+function isSuperAdmin(req: AuthedRequest) {
+  return req.userRole === 'super_admin';
+}
+
 app.use((req, _res, next) => {
   if (req.path.startsWith('/api')) {
     console.log(`[API] ${req.method} ${req.path}  ct:${req.headers['content-type'] ?? 'none'}`);
@@ -786,12 +790,13 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-/** POST /api/auth/signup  (admin only — protected) */
-app.post('/api/auth/signup', verifyToken, requireRole('admin'), async (req: AuthedRequest, res) => {
+/** POST /api/auth/signup  (admin / super_admin — protected) */
+app.post('/api/auth/signup', verifyToken, requireRole('admin', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const { email, password, role } = req.body as { email: string; password: string; role: string };
     if (!email || !password || !role) return res.status(400).json({ message: 'email, password, and role are required' });
-    if (!['admin', 'employee', 'intern'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
+    const allowed = isSuperAdmin(req) ? ['super_admin', 'admin', 'employee', 'intern'] : ['admin', 'employee', 'intern'];
+    if (!allowed.includes(role)) return res.status(400).json({ message: 'Invalid role' });
 
     const hash = await bcrypt.hash(password, 12);
     const { rows } = await pool.query(
@@ -803,6 +808,43 @@ app.post('/api/auth/signup', verifyToken, requireRole('admin'), async (req: Auth
     if (err.code === '23505') return res.status(409).json({ message: 'Email already exists' });
     console.error('[AUTH] signup error:', err.message);
     return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// PUBLIC: Request Access (no auth required)
+// --------------------------------------------------
+
+/** POST /api/public/request-access */
+app.post('/api/public/request-access', async (req, res) => {
+  try {
+    const { fullName, email, companyName, serverCount, message } = req.body as {
+      fullName: string; email: string; companyName: string;
+      serverCount: number | string; message?: string;
+    };
+
+    if (!fullName || !email || !companyName) {
+      return res.status(400).json({ message: 'fullName, email, and companyName are required' });
+    }
+
+    // Basic email format check
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+
+    const count = Number(serverCount) || 0;
+
+    await pool.query(
+      `INSERT INTO access_requests (full_name, email, company_name, server_count, message)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [fullName.trim(), email.toLowerCase().trim(), companyName.trim(), count, message?.trim() ?? null]
+    );
+
+    console.log(`[REQUEST-ACCESS] New request from ${email} (${companyName})`);
+    return res.status(201).json({ success: true, message: 'Your request has been submitted! We will be in touch shortly.' });
+  } catch (err: any) {
+    console.error('[REQUEST-ACCESS] error:', err.message);
+    return res.status(500).json({ message: 'Server error. Please try again later.' });
   }
 });
 
@@ -873,14 +915,122 @@ app.get('/api/profile', verifyToken, async (req: AuthedRequest, res) => {
 });
 
 // --------------------------------------------------
-// Admin-only: fetch ALL users
+// Admin-only: fetch ALL users (scoped by role)
 // --------------------------------------------------
-app.get('/api/admin/users', verifyToken, requireRole('admin'), async (_req: AuthedRequest, res) => {
+app.get('/api/admin/users', verifyToken, requireRole('admin', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
+    if (isSuperAdmin(req)) {
+      // Super admin sees everyone (including other admins)
+      const { rows } = await pool.query(
+        'SELECT id, email, role, created_by, created_at FROM users ORDER BY created_at ASC'
+      );
+      return res.json(rows);
+    }
+    // Regular admin sees only users they created
     const { rows } = await pool.query(
-      'SELECT id, email, role, created_by, created_at FROM users ORDER BY created_at ASC'
+      'SELECT id, email, role, created_by, created_at FROM users WHERE created_by = $1 ORDER BY created_at ASC',
+      [req.userId]
     );
     return res.json(rows);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Super Admin: Access Requests (Leads)
+// --------------------------------------------------
+
+/** GET /api/super-admin/access-requests — list all access requests */
+app.get('/api/super-admin/access-requests', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM access_requests ORDER BY created_at DESC'
+    );
+    return res.json(rows);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** PATCH /api/super-admin/access-requests/:id/status — update status to contacted */
+app.patch('/api/super-admin/access-requests/:id/status', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body as { status: string };
+    if (!['pending', 'contacted'].includes(status)) {
+      return res.status(400).json({ message: 'Status must be pending or contacted' });
+    }
+    const { rows } = await pool.query(
+      'UPDATE access_requests SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+      [status, id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Request not found' });
+    return res.json(rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** GET /api/super-admin/stats — platform-wide stats */
+app.get('/api/super-admin/stats', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+  try {
+    const [nodesR, usersR, requestsR, onlineR] = await Promise.all([
+      pool.query('SELECT COUNT(*) as total FROM nodes'),
+      pool.query('SELECT COUNT(*) as total FROM users'),
+      pool.query('SELECT COUNT(*) as total FROM access_requests'),
+      pool.query(`SELECT COUNT(*) as total FROM nodes WHERE status = 'online'`),
+    ]);
+    return res.json({
+      totalNodes:    Number(nodesR.rows[0]?.total ?? 0),
+      totalUsers:    Number(usersR.rows[0]?.total ?? 0),
+      totalRequests: Number(requestsR.rows[0]?.total ?? 0),
+      onlineNodes:   Number(onlineR.rows[0]?.total ?? 0),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** POST /api/super-admin/create-admin — Super Admin creates a new Admin */
+app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { email, password } = req.body as { email: string; password: string };
+    if (!email || !password) return res.status(400).json({ message: 'email and password are required' });
+    if (password.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
+
+    const hash = await bcrypt.hash(password, 12);
+    const { rows } = await pool.query(
+      'INSERT INTO users (email, password_hash, role, created_by) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
+      [email.toLowerCase().trim(), hash, 'admin', req.userId]
+    );
+    console.log(`[SUPER-ADMIN] Created new admin: ${email}`);
+    return res.status(201).json(rows[0]);
+  } catch (err: any) {
+    if (err.code === '23505') return res.status(409).json({ message: 'Email already exists' });
+    console.error('[SUPER-ADMIN] create-admin error:', err.message);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** GET /api/super-admin/all-nodes — Super Admin sees ALL nodes across the platform */
+app.get('/api/super-admin/all-nodes', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT n.id, n.display_name, n.ip_address, n.username, n.port, n.auth_type, n.region, n.status,
+              n.uptime_output, n.error, n.created_at, n.updated_at, n.created_by,
+              u.email AS created_by_email
+       FROM nodes n
+       LEFT JOIN users u ON u.id = n.created_by
+       ORDER BY n.created_at DESC`
+    );
+    return res.json(rows.map((row: any) => ({
+      id: row.id, displayName: row.display_name, ipAddress: row.ip_address,
+      username: row.username, port: row.port, authType: row.auth_type,
+      region: row.region, status: row.status, uptimeOutput: row.uptime_output,
+      error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
+      createdBy: row.created_by, createdByEmail: row.created_by_email,
+    })));
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
@@ -951,12 +1101,25 @@ app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
       region: row.region, status: row.status, uptimeOutput: row.uptime_output,
       error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
     });
-    if (req.userRole === 'admin') {
+
+    // Super admin: sees ALL nodes on the platform
+    if (isSuperAdmin(req)) {
       const { rows } = await pool.query(
         'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes ORDER BY created_at DESC'
       );
       return res.json(rows.map(mapRow));
     }
+
+    // Admin: sees only nodes THEY created
+    if (req.userRole === 'admin') {
+      const { rows } = await pool.query(
+        'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes WHERE created_by = $1 ORDER BY created_at DESC',
+        [req.userId]
+      );
+      return res.json(rows.map(mapRow));
+    }
+
+    // Employee / Intern: sees only explicitly assigned nodes
     const { rows } = await pool.query(
       'SELECT n.id,n.display_name,n.ip_address,n.username,n.port,n.auth_type,n.region,n.status,n.uptime_output,n.error,n.created_at,n.updated_at FROM nodes n WHERE n.id IN (SELECT node_id FROM node_assignments WHERE user_id = $1) ORDER BY n.created_at DESC',
       [req.userId]
@@ -1018,7 +1181,7 @@ app.post('/api/nodes/test', async (req, res) => {
   }
 });
 
-app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.post('/api/nodes', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const displayName = safeStr(req.body?.displayName);
     const ipAddress   = safeStr(req.body?.ipAddress);
@@ -1094,7 +1257,7 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee'), async (req
   }
 });
 
-app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const nodeId = req.params.id;
 
@@ -1160,7 +1323,7 @@ app.put('/api/nodes/:id', verifyToken, requireRole('admin', 'employee'), async (
   }
 });
 
-app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), async (req, res) => {
+app.delete('/api/nodes/:id', verifyToken, requireRole('admin', 'super_admin'), async (req, res) => {
   try {
     await pool.query('DELETE FROM nodes WHERE id = $1', [req.params.id]);
     res.json({ success: true });
@@ -1173,13 +1336,13 @@ app.delete('/api/nodes/:id', verifyToken, requireRole('admin'), async (req, res)
 // User Management API (admin / employee controlled)
 // --------------------------------------------------
 
-app.post('/api/users/create', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const { email, password, role, created_by } = req.body as {
       email: string; password: string; role: string; created_by: string;
     };
 
-    // Employees can only create interns
+    // Employees can only create interns; admins can create employee/intern; super_admin can create any
     if (req.userRole === 'employee' && role !== 'intern') {
       return res.status(403).json({ message: 'Employees can only create intern accounts' });
     }
@@ -1221,10 +1384,18 @@ app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), asyn
 });
 
 // --------------------------------------------------
-// Users list (admin sees all their employees; employee sees their interns)
+// Users list (scoped by role hierarchy)
 // --------------------------------------------------
-app.get('/api/users', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.get('/api/users', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
+    // Super admin sees ALL users
+    if (isSuperAdmin(req)) {
+      const { rows } = await pool.query(
+        'SELECT id, email, role, created_by, created_at FROM users ORDER BY created_at ASC'
+      );
+      return res.json(rows);
+    }
+    // Admin / employee: sees only users they directly created
     const { rows } = await pool.query(
       'SELECT id, email, role, created_by, created_at FROM users WHERE created_by = $1',
       [req.userId]
@@ -1371,8 +1542,8 @@ terminalWss.on('connection', async (ws, req) => {
     return;
   }
 
-  // ── 3. Verify node assignment (non-admin must be explicitly assigned) ──
-  if (wsUserRole !== 'admin') {
+  // ── 3. Verify node assignment (super_admin & admin have full access; others need assignment) ──
+  if (wsUserRole !== 'admin' && wsUserRole !== 'super_admin') {
     const { rows: asgn } = await pool.query(
       'SELECT node_id FROM node_assignments WHERE user_id=$1 AND node_id=$2',
       [wsUserId, nodeId]

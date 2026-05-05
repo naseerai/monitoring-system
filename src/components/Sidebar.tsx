@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   LayoutDashboard, Database, Shield, LifeBuoy, Power,
-  Plus, Loader2, Users, UserCircle, Menu, X,
+  Plus, Loader2, Users, UserCircle, Menu, X, Crown, Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AddNodeModal, { NodeFormData } from './AddNodeModal';
@@ -24,7 +24,7 @@ export interface NodeRecord {
 interface SidebarProps {
   activePage: string;
   onNavigate: (to: string) => void;
-  role: 'admin' | 'employee' | 'intern';
+  role: 'super_admin' | 'admin' | 'employee' | 'intern';
 }
 
 interface NavItemProps {
@@ -158,6 +158,13 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
         <NavItem icon={LayoutDashboard} label="Dashboard"  active={activePage === 'dashboard'}  onClick={() => navigate('')}       collapsed={collapsed} />
         <NavItem icon={Database}        label="Nodes"       active={activePage === 'nodes' || activePage === 'node-detail'} onClick={() => navigate('nodes')} collapsed={collapsed} />
 
+        {role === 'super_admin' && (
+          <>
+            <NavItem icon={Crown}   label="Command Center"    active={activePage === 'super-admin'}   onClick={() => navigate('super-admin')}   collapsed={collapsed} />
+            <NavItem icon={Settings} label="System Management" active={activePage === 'system-management'} onClick={() => navigate('system-management')} collapsed={collapsed} />
+          </>
+        )}
+
         {role === 'admin' && (
           <NavItem icon={Shield} label="User Management" active={activePage === 'users'}   onClick={() => navigate('users')}   collapsed={collapsed} />
         )}
@@ -188,14 +195,17 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
           </div>
           <div className="min-w-0">
             <p className="text-[10px] text-white font-medium truncate">{profile?.email}</p>
-            <p className="text-[9px] text-gray-500 uppercase tracking-widest">{role}</p>
+            <p className="text-[9px] text-gray-500 uppercase tracking-widest flex items-center gap-1">
+              {role === 'super_admin' && <Crown size={8} className="text-[#DFFF00]" />}
+              {role}
+            </p>
           </div>
         </div>
       )}
 
       {/* Bottom actions */}
       <div className={`${collapsed ? 'px-2' : 'px-4'} space-y-1 mt-2 pb-4`}>
-        {role !== 'intern' && (
+        {role !== 'intern' && role !== 'super_admin' && (
           <button
             id="btn-new-node"
             onClick={() => setModalOpen(true)}

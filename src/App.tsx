@@ -9,9 +9,11 @@ import NodeDetailPage from './components/NodeDetailPage';
 import TerminalPage from './components/TerminalPage';
 import UserManagementPage from './components/UserManagementPage';
 import UserProfilePage from './components/UserProfilePage';
+import SuperAdminDashboard from './components/SuperAdminDashboard';
+import SystemManagementPage from './components/SystemManagementPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings';
+type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings' | 'super-admin' | 'system-management';
 
 interface NodeRecord {
   id: string;
@@ -70,11 +72,13 @@ export default function App() {
       const hash = window.location.hash.replace('#', '');
       if (hash.startsWith('terminal/')) { setTerminalNodeId(hash.replace('terminal/', '')); setPage('terminal'); }
       else if (hash.startsWith('nodes/')) { setSelectedNodeId(hash.replace('nodes/', '')); setPage('node-detail'); setTerminalNodeId(null); }
-      else if (hash === 'nodes')    { setPage('nodes');    setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'users')    { setPage('users');    setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'profile')  { setPage('profile');  setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'settings') { setPage('settings'); setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'login')    { setShowLogin(true);  setPage('dashboard'); }
+      else if (hash === 'nodes')              { setPage('nodes');              setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'users')              { setPage('users');              setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'profile')            { setPage('profile');            setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'settings')           { setPage('settings');           setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'super-admin')        { setPage('super-admin');        setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'system-management')  { setPage('system-management');  setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'login')              { setShowLogin(true);  setPage('dashboard'); }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
     handleHash();
@@ -99,7 +103,7 @@ export default function App() {
     return <LandingPage onNavigateToLogin={() => setShowLogin(true)} />;
   }
 
-  const role = profile?.role ?? 'intern';
+  const role = (profile?.role ?? 'intern') as 'super_admin' | 'admin' | 'employee' | 'intern';
 
   return (
     <ErrorBoundary>
@@ -165,6 +169,14 @@ export default function App() {
 
             {page === 'users' && (role === 'admin' || role === 'employee') && (
               <UserManagementPage />
+            )}
+
+            {page === 'super-admin' && role === 'super_admin' && (
+              <SuperAdminDashboard />
+            )}
+
+            {page === 'system-management' && role === 'super_admin' && (
+              <SystemManagementPage />
             )}
 
             {page === 'profile' && (
