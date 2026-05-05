@@ -11,6 +11,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.ts';
+import { sendWelcomeEmail } from './src/utils/mailer.ts';
 
 // --------------------------------------------------
 // Input Sanitization Helpers
@@ -1039,20 +1040,156 @@ app.patch('/api/super-admin/access-requests/:id/status', verifyToken, requireRol
 /** GET /api/super-admin/stats — platform-wide stats */
 app.get('/api/super-admin/stats', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
   try {
-    const [nodesR, usersR, requestsR, onlineR] = await Promise.all([
+    const [nodesR, usersR, requestsR, onlineR, adminR] = await Promise.all([
       pool.query('SELECT COUNT(*) as total FROM nodes'),
       pool.query('SELECT COUNT(*) as total FROM users'),
       pool.query('SELECT COUNT(*) as total FROM access_requests'),
       pool.query(`SELECT COUNT(*) as total FROM nodes WHERE status = 'online'`),
+      pool.query(`SELECT COUNT(*) as total FROM users WHERE role = 'admin'`),
     ]);
+    // Global load average across all online nodes (placeholder — real value comes from poller)
     return res.json({
       totalNodes:    Number(nodesR.rows[0]?.total ?? 0),
       totalUsers:    Number(usersR.rows[0]?.total ?? 0),
       totalRequests: Number(requestsR.rows[0]?.total ?? 0),
       onlineNodes:   Number(onlineR.rows[0]?.total ?? 0),
+      activeAdmins:  Number(adminR.rows[0]?.total ?? 0),
     });
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Super Admin: Admin Management (quotas, password reset)
+// --------------------------------------------------
+
+/** GET /api/super-admin/admins — list all admins with stats */
+app.get('/api/super-admin/admins', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        u.id, u.email, u.role, u.created_at, u.node_limit, u.user_limit,
+        (SELECT COUNT(*)::int FROM users u2 WHERE u2.created_by = u.id) AS user_count,
+        (SELECT COUNT(*)::int FROM nodes n  WHERE n.created_by  = u.id) AS node_count
+      FROM users u
+      WHERE u.role = 'admin'
+      ORDER BY u.created_at ASC
+    `);
+    return res.json(rows);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** PATCH /api/super-admin/admins/:id/quota — update node_limit and user_limit */
+app.patch('/api/super-admin/admins/:id/quota', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { nodeLimit, userLimit } = req.body as { nodeLimit?: number; userLimit?: number };
+    if (nodeLimit === undefined && userLimit === undefined) {
+      return res.status(400).json({ message: 'nodeLimit or userLimit required' });
+    }
+    const updates: string[] = [];
+    const values: any[] = [];
+    if (nodeLimit !== undefined) { values.push(Number(nodeLimit)); updates.push(`node_limit = $${values.length}`); }
+    if (userLimit !== undefined) { values.push(Number(userLimit)); updates.push(`user_limit = $${values.length}`); }
+    values.push(id);
+    const { rows } = await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${values.length} AND role = 'admin' RETURNING id, email, node_limit, user_limit`,
+      values
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Admin not found' });
+    return res.json(rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** PATCH /api/super-admin/admins/:id/password — reset an admin's password */
+app.patch('/api/super-admin/admins/:id/password', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body as { newPassword: string };
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ message: 'newPassword must be at least 8 characters' });
+    }
+    const hash = await bcrypt.hash(newPassword, 12);
+    const { rows } = await pool.query(
+      `UPDATE users SET password_hash = $1 WHERE id = $2 AND role = 'admin' RETURNING id, email`,
+      [hash, id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Admin not found' });
+    console.log(`[SUPER-ADMIN] Reset password for admin: ${rows[0].email}`);
+    return res.json({ success: true, message: 'Password reset successfully' });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// System Settings (SMTP + Email Template)
+// --------------------------------------------------
+
+/** GET /api/super-admin/settings/:key */
+app.get('/api/super-admin/settings/:key', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT value FROM system_settings WHERE setting_key = $1',
+      [req.params.key]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Setting not found' });
+    // Never return the smtp password in plaintext
+    const val = { ...rows[0].value };
+    if (req.params.key === 'smtp' && val.password) val.password = '••••••••';
+    return res.json(val);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** PUT /api/super-admin/settings/:key */
+app.put('/api/super-admin/settings/:key', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { key } = req.params;
+    const newValue = req.body;
+    if (!newValue || typeof newValue !== 'object') {
+      return res.status(400).json({ message: 'Body must be a JSON object' });
+    }
+    // If password field is the placeholder, fetch and preserve the old one
+    if (key === 'smtp' && newValue.password === '••••••••') {
+      const { rows: old } = await pool.query('SELECT value FROM system_settings WHERE setting_key = $1', [key]);
+      if (old[0]) newValue.password = old[0].value.password ?? '';
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO system_settings (setting_key, value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (setting_key) DO UPDATE SET value = $2, updated_at = NOW()
+       RETURNING value`,
+      [key, newValue]
+    );
+    return res.json(rows[0].value);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** POST /api/super-admin/settings/smtp/test — verify SMTP connection */
+app.post('/api/super-admin/settings/smtp/test', verifyToken, requireRole('super_admin'), async (_req: AuthedRequest, res) => {
+  try {
+    const { rows } = await pool.query("SELECT value FROM system_settings WHERE setting_key = 'smtp'");
+    if (!rows[0]) return res.status(404).json({ ok: false, error: 'SMTP not configured' });
+    const smtp = rows[0].value;
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.default.createTransport({
+      host: smtp.host, port: smtp.port,
+      secure: smtp.port === 465,
+      auth: smtp.username ? { user: smtp.username, pass: smtp.password } : undefined,
+    } as any);
+    await transporter.verify();
+    return res.json({ ok: true, message: 'SMTP connection verified successfully' });
+  } catch (err: any) {
+    return res.status(200).json({ ok: false, error: err.message });
   }
 });
 
@@ -1069,6 +1206,11 @@ app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'
       [email.toLowerCase().trim(), hash, 'admin', req.userId]
     );
     console.log(`[SUPER-ADMIN] Created new admin: ${email}`);
+
+    // Auto-send welcome email (non-blocking)
+    void sendWelcomeEmail(pool, email.toLowerCase().trim(), password, `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`)
+      .catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
+
     return res.status(201).json(rows[0]);
   } catch (err: any) {
     if (err.code === '23505') return res.status(409).json({ message: 'Email already exists' });
@@ -1166,10 +1308,11 @@ app.get('/api/nodes', verifyToken, async (req: AuthedRequest, res) => {
       error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
     });
 
-    // Super admin: sees ALL nodes on the platform
+    // Super admin: sees only THEIR OWN nodes (created_by = their ID)
     if (isSuperAdmin(req)) {
       const { rows } = await pool.query(
-        'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes ORDER BY created_at DESC'
+        'SELECT id,display_name,ip_address,username,port,auth_type,region,status,uptime_output,error,created_at,updated_at FROM nodes WHERE created_by = $1 ORDER BY created_at DESC',
+        [req.userId]
       );
       return res.json(rows.map(mapRow));
     }
@@ -1247,6 +1390,18 @@ app.post('/api/nodes/test', async (req, res) => {
 
 app.post('/api/nodes', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
+    // ── Quota check for admin/super_admin ───────────────────────────────
+    if (req.userRole === 'admin' || req.userRole === 'super_admin') {
+      const { rows: qRows } = await pool.query(
+        'SELECT node_limit, (SELECT COUNT(*) FROM nodes WHERE created_by = $1) AS current_count FROM users WHERE id = $1',
+        [req.userId]
+      );
+      const q = qRows[0];
+      if (q && Number(q.current_count) >= Number(q.node_limit)) {
+        return res.status(403).json({ success: false, message: `Node quota exceeded. Limit: ${q.node_limit}. Contact your Super Admin to increase the limit.` });
+      }
+    }
+
     const displayName = safeStr(req.body?.displayName);
     const ipAddress   = safeStr(req.body?.ipAddress);
     const username    = safeStr(req.body?.username);
@@ -1415,6 +1570,18 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'sup
       return res.status(400).json({ message: 'email, password, and role are required' });
     }
 
+    // ── Quota check for admin/super_admin ─────────────────────────────────
+    if (req.userRole === 'admin' || req.userRole === 'super_admin') {
+      const { rows: qRows } = await pool.query(
+        'SELECT user_limit, (SELECT COUNT(*) FROM users WHERE created_by = $1) AS current_count FROM users WHERE id = $1',
+        [req.userId]
+      );
+      const q = qRows[0];
+      if (q && Number(q.current_count) >= Number(q.user_limit)) {
+        return res.status(403).json({ message: `User quota exceeded. Limit: ${q.user_limit}. Contact your Super Admin to increase the limit.` });
+      }
+    }
+
     // Hash password and insert into users table
     const hash = await bcrypt.hash(password, 12);
     const { rows: newUserRows } = await pool.query(
@@ -1423,13 +1590,19 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'sup
     );
     if (!newUserRows[0]) return res.status(500).json({ message: 'Failed to create user' });
     console.log(`[CREATE-USER] ✓ Created ${email} (role: ${role})`);
+
+    // ── Auto-send welcome email (non-blocking) ─────────────────────────────
+    void sendWelcomeEmail(pool, email.toLowerCase().trim(), password, `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`)
+      .catch((e: any) => console.warn('[MAILER] Non-fatal error:', e?.message));
+
     return res.status(201).json(newUserRows[0]);
   } catch (err: any) {
+    if (err.code === '23505') return res.status(409).json({ message: 'An account with this email has already been registered.' });
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
 });
 
-app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const targetId = req.params.id;
 
