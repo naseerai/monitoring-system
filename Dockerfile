@@ -9,8 +9,8 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
-# Copy all files
-COPY . .8
+# Copy all files (FIXED)
+COPY . .
 
 # Build frontend
 RUN npm run build
@@ -23,20 +23,18 @@ WORKDIR /app
 
 # Copy package files and install production deps
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --omit=dev
 
-# Copy the built frontend bundle
+# Copy built frontend
 COPY --from=builder /app/dist ./dist
 
-# Copy the backend entry-point and ALL source files it imports at runtime
+# Copy backend files
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/src ./src
 
-# Reuse the already-installed node_modules from Stage 1
+# Copy node_modules (optional but okay)
 COPY --from=builder /app/node_modules ./node_modules
 
-# Expose backend port
 EXPOSE 3000
 
-# tsx resolves TypeScript imports natively — no compile step needed
 CMD ["npx", "tsx", "server.ts"]
