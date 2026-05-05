@@ -12,12 +12,13 @@ interface NodeRecord { id: string; display_name: string; ip_address: string; sta
 
 function RoleBadge({ role }: { role: UserRole }) {
   const styles: Record<UserRole, string> = {
+    super_admin: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40',
     admin:    'bg-purple-500/20 text-purple-400 border-purple-500/40',
     employee: 'bg-neon-lime/15 text-neon-lime border-neon-lime/40',
     intern:   'bg-blue-500/20 text-blue-400 border-blue-500/40',
   };
   return (
-    <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded border ${styles[role]}`}>
+    <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded border ${styles[role] ?? styles.intern}`}>
       {role}
     </span>
   );
@@ -303,9 +304,11 @@ function CreateUserModal({
 
 export default function UserManagementPage() {
   const { profile: me, token: rawToken, session } = useAuth() as any;
-  const isAdmin = me?.role === 'admin';
+  const isSuperAdmin = me?.role === 'super_admin';
+  const isAdmin = me?.role === 'admin' || isSuperAdmin;
   const token: string = rawToken ?? session?.access_token ?? '';
-  const creatableRole: UserRole = isAdmin ? 'employee' : 'intern';
+  // super_admin can create admins; admin creates employees; employee creates interns
+  const creatableRole: UserRole = isSuperAdmin ? 'admin' : isAdmin ? 'employee' : 'intern';
 
   const [users,     setUsers]     = useState<Profile[]>([]);
   const [allNodes,  setAllNodes]  = useState<NodeRecord[]>([]);
@@ -320,8 +323,11 @@ export default function UserManagementPage() {
     if (!me || !token) return;
     setLoadError(null);
     try {
-      // Users
-      const endpoint = isAdmin ? '/api/admin/users' : '/api/users';
+      // Pick the correct endpoint based on role:
+      // super_admin → /api/admin/users (sees everyone)
+      // admin       → /api/admin/users (sees their own users)
+      // employee    → /api/users        (sees their interns)
+      const endpoint = (isAdmin) ? '/api/admin/users' : '/api/users';
       const usersRes = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
       if (usersRes.ok) {
         const data = await usersRes.json();
@@ -397,10 +403,10 @@ setAssignmentCounts(counts);
             {isAdmin ? <Shield size={22} className="text-neon-lime" /> : <Users size={22} className="text-neon-lime" />}
             <div>
               <h1 className="text-2xl font-bold text-white tracking-tight">
-                {isAdmin ? 'User Management' : 'Team Management'}
+                {isSuperAdmin ? 'All Users' : isAdmin ? 'User Management' : 'Team Management'}
               </h1>
               <p className="text-xs text-gray-500 mt-0.5">
-                {isAdmin ? 'Manage all system operators and their node access' : 'Manage your intern accounts and server access'}
+                {isSuperAdmin ? 'Platform-wide view of all users and access' : isAdmin ? 'Manage all system operators and their node access' : 'Manage your intern accounts and server access'}
               </p>
             </div>
           </div>

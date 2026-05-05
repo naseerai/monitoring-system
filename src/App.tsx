@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from './context/AuthContext';
+import { useNodes } from './context/NodesContext';
 import LoginPage from './components/LoginPage';
 import LandingPage from './components/LandingPage';
 import Sidebar from './components/Sidebar';
@@ -31,29 +32,9 @@ export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [terminalNodeId, setTerminalNodeId] = useState<string | null>(null);
-  const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
+  // ── Nodes from shared context (no local fetch loop) ─────────────────────
+  const { nodes: allNodes } = useNodes();
   const [showLogin, setShowLogin] = useState(false);
-
-  // ── Fetch nodes (with auth token) ────────────────────────────────────────
-  const fetchNodes = () => {
-    if (!session?.access_token) return;
-
-    fetch('/api/nodes', {
-      cache: 'no-store',
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        'Cache-Control': 'no-cache',
-      },
-    })
-      .then(r => r.json())
-      .then(data => setAllNodes(Array.isArray(data) ? data : []))
-      .catch(() => { });
-  };
-
-  useEffect(() => {
-    fetchNodes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
 
   // ── Auto-redirect to login on sign-out ───────────────────────────────────
   const prevSessionRef = useRef(session);
@@ -167,7 +148,7 @@ export default function App() {
               />
             )}
 
-            {page === 'users' && (role === 'admin' || role === 'employee') && (
+            {page === 'users' && (role === 'super_admin' || role === 'admin' || role === 'employee') && (
               <UserManagementPage />
             )}
 

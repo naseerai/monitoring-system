@@ -554,8 +554,25 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let netOut:    number = 0;
 
   try {
-    ssh = await connectSSH(node);
-
+    // ── Per-node SSH connect: isolated so one node failure doesn't crash others ──
+    try {
+      ssh = await connectSSH(node);
+    } catch (connectErr: any) {
+      const message = classifySSHError(connectErr);
+      console.warn(`[POLL] SSH connect failed for ${node.displayName} (${node.ipAddress}): ${message}`);
+      return {
+        type: 'nodeMetrics',
+        nodeId: node.id,
+        status: 'offline',
+        timestamp: nowIso(),
+        cpu: 0, ramUsed: 0, ramTotal: 0, ramPercent: 0,
+        swap: 0, cache: 0, uptime: 'offline', ping: 0,
+        diskRead, diskWrite, netIn, netOut,
+        logs: [{ time: new Date().toLocaleTimeString(), level: 'ERROR', message }],
+        os: 'unknown', kernel: 'unknown', cpuModel: 'unknown', cpuCores: 0,
+        publicIp: node.ipAddress, docker: [], dockerStatus: 'Offline',
+      };
+    }
     // ── Phase 1: collect static + disk I/O ───────────────────────────────
     const [
       cpuOut,
@@ -713,6 +730,53 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
+
+// --------------------------------------------------
+// Rate Limiter: max 5 req/s per user (or IP) per endpoint
+// --------------------------------------------------
+
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_MAX = 5;       // requests allowed per window
+const RATE_LIMIT_WINDOW = 1000; // 1-second sliding window
+
+// Clean up stale entries every 30 s to prevent unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap) {
+    if (now >= entry.resetAt) rateLimitMap.delete(key);
+  }
+}, 30_000);
+
+app.use('/api', (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Use the JWT user-id if present, otherwise fall back to IP
+  const auth = req.headers.authorization ?? '';
+  let identity = req.ip ?? 'unknown';
+  if (auth.startsWith('Bearer ')) {
+    try {
+      const payload = verifyJwt(auth.slice(7));
+      identity = payload.id;
+    } catch { /* unverified — use IP */ }
+  }
+
+  const key = `${identity}::${req.method}::${req.path}`;
+  const now = Date.now();
+  let entry = rateLimitMap.get(key);
+
+  if (!entry || now >= entry.resetAt) {
+    entry = { count: 1, resetAt: now + RATE_LIMIT_WINDOW };
+    rateLimitMap.set(key, entry);
+  } else {
+    entry.count++;
+  }
+
+  if (entry.count > RATE_LIMIT_MAX) {
+    const retryAfterMs = Math.max(0, entry.resetAt - now);
+    res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1000)));
+    return res.status(429).json({ message: 'Too many requests — please slow down' });
+  }
+
+  next();
+});
 
 // --------------------------------------------------
 // RBAC Middleware
@@ -1411,9 +1475,15 @@ app.get('/api/users', verifyToken, requireRole('admin', 'employee', 'super_admin
 // --------------------------------------------------
 
 // GET /api/users/:id/assignments — list node_ids assigned to a user
-app.get('/api/users/:id/assignments', verifyToken, requireRole('admin', 'employee'), async (req: AuthedRequest, res) => {
+app.get('/api/users/:id/assignments', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
     const targetId = req.params.id;
+
+    // Super admin can view anyone's assignments
+    if (isSuperAdmin(req)) {
+      const { rows } = await pool.query('SELECT node_id FROM node_assignments WHERE user_id = $1', [targetId]);
+      return res.json(rows);
+    }
 
     // Employees can only view assignments for their own interns
     if (req.userRole === 'employee') {

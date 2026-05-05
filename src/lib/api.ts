@@ -1,6 +1,6 @@
 // Shared types & token helpers (replaces @supabase/supabase-js on the frontend)
 
-export type UserRole = 'admin' | 'employee' | 'intern';
+export type UserRole = 'super_admin' | 'admin' | 'employee' | 'intern';
 
 export interface Profile {
   id: string;

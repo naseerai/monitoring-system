@@ -10,7 +10,7 @@ import {
   LineChart, Line, CartesianGrid,
 } from 'recharts';
 import { wsUrl } from '../utils/wsUrl';
-import { useAuth } from '../context/AuthContext';
+import { useNodes } from '../context/NodesContext';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -82,10 +82,10 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { session } = useAuth();
+  // ── Node list from shared context (no local fetch loop) ─────────────────
+  const { nodes } = useNodes();
 
   // ── Node list & rotation ─────────────────────────────────────────────────
-  const [nodes, setNodes]               = useState<NodeRecord[]>([]);
   const [activeIndex, setActiveIndex]   = useState(0);
   const [countdown, setCountdown]       = useState(ROTATION_SECS);
   const rotationRef                     = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -97,29 +97,9 @@ export default function Dashboard() {
   const [ramHist,  setRamHist]  = useState<ChartPoint[]>([]);
   const [netHist,  setNetHist]  = useState<NetPoint[]>([]);
 
-  // Rotate through ALL registered nodes (show offline state too); metrics will be '—' when offline
+  // Rotate through ALL registered nodes (show offline state too)
   const rotatingNodes = nodes;
   const currentNode   = rotatingNodes[activeIndex] ?? null;
-
-  // ── Fetch node list ──────────────────────────────────────────────────────
-  const fetchNodes = useCallback(async () => {
-    if (!session?.access_token) return;
-    try {
-      const res = await fetch('/api/nodes', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data: NodeRecord[] = await res.json();
-        setNodes(data);
-      }
-    } catch {}
-  }, [session]);
-
-  useEffect(() => {
-    fetchNodes();
-    const iv = setInterval(fetchNodes, 15000);
-    return () => clearInterval(iv);
-  }, [fetchNodes]);
 
   // ── Rotation timer ───────────────────────────────────────────────────────
   const advanceNode = useCallback(() => {

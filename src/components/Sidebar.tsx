@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   LayoutDashboard, Database, Shield, LifeBuoy, Power,
   Plus, Loader2, Users, UserCircle, Menu, X, Crown, Settings,
@@ -6,6 +6,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import AddNodeModal, { NodeFormData } from './AddNodeModal';
 import { useAuth } from '../context/AuthContext';
+import { useNodes } from '../context/NodesContext';
 
 export interface NodeRecord {
   id: string;
@@ -62,8 +63,10 @@ function NodeStatusDot({ status }: { status: NodeRecord['status'] }) {
 
 export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) {
   const { signOut, session, profile } = useAuth();
+  // ── Nodes from shared context — no local fetch loop ──────────────────────
+  const { nodes: ctxNodes, refresh } = useNodes();
+  const nodes = ctxNodes as NodeRecord[];
   const [modalOpen, setModalOpen] = useState(false);
-  const [nodes, setNodes] = useState<NodeRecord[] | null>(null);
 
   // Mobile: drawer open/closed; Desktop: collapsed/expanded
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -74,29 +77,6 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
     onNavigate(to);
     setMobileOpen(false);
   };
-
-  const fetchNodes = useCallback(async () => {
-    if (!session?.access_token) return;
-    try {
-      const res = await fetch('/api/nodes', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setNodes(Array.isArray(data) ? data : []);
-      } else {
-        setNodes(prev => prev ?? []);
-      }
-    } catch {
-      setNodes(prev => prev ?? []);
-    }
-  }, [session]);
-
-  useEffect(() => {
-    fetchNodes();
-    const iv = setInterval(fetchNodes, 5000);
-    return () => clearInterval(iv);
-  }, [fetchNodes]);
 
   const handleTest = async (data: NodeFormData): Promise<{ success: boolean; message: string }> => {
     const res = await fetch('/api/nodes/test', {
@@ -110,27 +90,18 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
   };
 
   const handleSave = async (data: NodeFormData) => {
-    const tempId = `temp-${Date.now()}`;
-    setNodes(prev => [{
-      id: tempId, displayName: data.displayName, ipAddress: data.ipAddress,
-      username: data.username, port: parseInt(data.port) || 22,
-      authType: data.authType, status: 'connecting', createdAt: new Date().toISOString(),
-    }, ...(prev ?? [])]);
-
     const res = await fetch('/api/nodes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
       body: JSON.stringify(data),
     });
     const text = await res.text();
-    setNodes(prev => (prev ?? []).filter(n => n.id !== tempId));
     if (!res.ok) {
-      await fetchNodes();
       let msg = `Server error (HTTP ${res.status})`;
       try { msg = JSON.parse(text)?.message || msg; } catch { }
       throw new Error(msg);
     }
-    await fetchNodes();
+    refresh(); // update shared context immediately
   };
 
   const safeNodes = nodes ?? [];
@@ -162,6 +133,7 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
           <>
             <NavItem icon={Crown}   label="Command Center"    active={activePage === 'super-admin'}   onClick={() => navigate('super-admin')}   collapsed={collapsed} />
             <NavItem icon={Settings} label="System Management" active={activePage === 'system-management'} onClick={() => navigate('system-management')} collapsed={collapsed} />
+            <NavItem icon={Users}   label="All Users"          active={activePage === 'users'}         onClick={() => navigate('users')}          collapsed={collapsed} />
           </>
         )}
 

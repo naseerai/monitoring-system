@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Globe,
   Search,
@@ -14,6 +14,7 @@ import EditNodeModal, { EditNodeFormData } from './EditNodeModal';
 // import TerminalModal from './TerminalModal';
 import { wsUrl } from '../utils/wsUrl';
 import { useAuth } from '../context/AuthContext';
+import { useNodes } from '../context/NodesContext';
 
 interface NodeRecord {
   id: string;
@@ -254,9 +255,11 @@ function LoadingState() {
 
 export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: Props) {
   const { session } = useAuth();
+  // ── Nodes from shared context — no local polling loop ──────────────────────
+  const { nodes: ctxNodes, loading: ctxLoading, refresh } = useNodes();
   const isIntern = role === 'intern';
-  // null = loading, [] = loaded but empty
-  const [nodes, setNodes] = useState<NodeRecord[] | null>(null);
+  // Keep null while context is on first load (shows spinner); cast after that
+  const nodes: NodeRecord[] | null = ctxLoading ? null : (ctxNodes as NodeRecord[]);
   const [metrics, setMetrics] = useState<Map<string, NodeMetrics>>(new Map());
   const [filter, setFilter] = useState<Filter>('ALL');
   const [search, setSearch] = useState('');
@@ -269,35 +272,6 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
   const [terminalNodeId, setTerminalNodeId] = useState<string | null>(null);
   const [terminalNodeName, setTerminalNodeName] = useState('');
 
-  // ── Fetch nodes ──────────────────────────────────────────────────────────
-
-  const fetchNodes = useCallback(async () => {
-    try {
-      const res = await fetch('/api/nodes', {
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache',
-          ...(session?.access_token
-            ? { Authorization: `Bearer ${session.access_token}` }
-            : {}),
-        },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setNodes(Array.isArray(data) ? data : []);
-      } else {
-        setNodes((prev) => prev ?? []);
-      }
-    } catch {
-      setNodes((prev) => prev ?? []);
-    }
-  }, [session]);
-
-  useEffect(() => {
-    fetchNodes();
-    const iv = setInterval(fetchNodes, 10000);
-    return () => clearInterval(iv);
-  }, [fetchNodes]);
 
   // ── WebSocket live metrics ───────────────────────────────────────────────
 
@@ -354,7 +328,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
       throw new Error(msg);
     }
 
-    await fetchNodes();
+    refresh(); // tell context to re-fetch
   };
 
   const handleEditTest = async (
@@ -406,7 +380,7 @@ export default function NodesPage({ onViewDetails, onOpenTerminalPage, role }: P
       return next;
     });
 
-    await fetchNodes();
+    refresh(); // tell context to re-fetch
   };
 
   // ── Terminal handlers ────────────────────────────────────────────────────

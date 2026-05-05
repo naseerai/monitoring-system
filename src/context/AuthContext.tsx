@@ -59,11 +59,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = () => {
+    // Explicitly clear ALL auth data from localStorage first
+    localStorage.removeItem('auth_token');
     removeToken();
     setTok(null);
     setProfile(null);
-    // Redirect to login page (hash-router picks this up in App.tsx)
-    window.location.hash = 'login';
+    // Hard redirect to root — forces full re-render back to landing page
+    window.location.href = '/';
   };
 
   // Expose session-like shape so existing components still work
