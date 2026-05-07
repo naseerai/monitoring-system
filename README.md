@@ -326,5 +326,3 @@ If you're a system administrator drowning in dashboard tabs, or a developer buil
 And it can run on a single VPS.
 
 ---
-
-*If you're interested in the project or want to discuss the architecture in more detail, I'd love to connect. The engineering decisions behind Neon Sentry are the kind that only get better with rigorous critique.*
