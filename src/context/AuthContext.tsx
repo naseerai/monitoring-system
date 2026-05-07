@@ -8,8 +8,10 @@ interface AuthState {
   token:    string | null;
   profile:  Profile | null;
   loading:  boolean;
+  mustChangePassword: boolean;
   signIn:   (email: string, password: string) => Promise<{ error: string | null }>;
   signOut:  () => void;
+  clearMustChange: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -18,6 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token,   setTok]    = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
   const hydrateProfile = useCallback((tok: string) => {
     const payload = decodeToken(tok);
@@ -52,6 +55,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(tok);
       setTok(tok);
       hydrateProfile(tok);
+      // Store must_change_password from login response
+      setMustChangePassword(data.must_change_password === true);
       return { error: null };
     } catch (e: any) {
       return { error: e.message || 'Network error' };
@@ -64,15 +69,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     removeToken();
     setTok(null);
     setProfile(null);
+    setMustChangePassword(false);
     // Hard redirect to root — forces full re-render back to landing page
     window.location.href = '/';
   };
+
+  /** Called after a successful first-login password reset */
+  const clearMustChange = () => setMustChangePassword(false);
 
   // Expose session-like shape so existing components still work
   const session = token ? { access_token: token } : null;
 
   return (
-    <AuthContext.Provider value={{ token, profile, loading, signIn, signOut } as any}>
+    <AuthContext.Provider value={{ token, profile, loading, mustChangePassword, signIn, signOut, clearMustChange } as any}>
       {children}
     </AuthContext.Provider>
   );

@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext';
 import { useNodes } from './context/NodesContext';
 import LoginPage from './components/LoginPage';
 import LandingPage from './components/LandingPage';
+import ForcePasswordResetPage from './components/ForcePasswordResetPage';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import NodesPage from './components/NodesPage';
@@ -28,14 +29,21 @@ interface NodeRecord {
 }
 
 export default function App() {
-  const { session, profile, loading } = useAuth();
+  const { session, profile, loading, mustChangePassword } = useAuth() as any;
 
   const [page, setPage] = useState<Page>('dashboard');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [terminalNodeId, setTerminalNodeId] = useState<string | null>(null);
   // ── Nodes from shared context (no local fetch loop) ─────────────────────
   const { nodes: allNodes } = useNodes();
+
+  // showLogin controls whether we render LoginPage vs LandingPage (when not authed)
   const [showLogin, setShowLogin] = useState(false);
+
+  // ── On mount: if URL hash is #login, show login immediately ──────────────
+  useEffect(() => {
+    if (window.location.hash === '#login') setShowLogin(true);
+  }, []);
 
   // ── Auto-redirect to login on sign-out ───────────────────────────────────
   const prevSessionRef = useRef(session);
@@ -61,13 +69,22 @@ export default function App() {
       else if (hash === 'super-admin')        { setPage('super-admin');        setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'system-management')  { setPage('system-management');  setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'system-settings')    { setPage('system-settings');    setSelectedNodeId(null); setTerminalNodeId(null); }
-      else if (hash === 'login')              { setShowLogin(true);  setPage('dashboard'); }
+      // #login → show login overlay (clears hash so the URL stays clean as /)
+      else if (hash === 'login') {
+        // If already logged in, redirect straight to dashboard
+        if (session) {
+          window.location.hash = '';
+          setPage('dashboard');
+        } else {
+          setShowLogin(true);
+        }
+      }
       else { setPage('dashboard'); setSelectedNodeId(null); setTerminalNodeId(null); }
     };
     handleHash();
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
+  }, [session]);
 
   const navigate = (to: string) => { window.location.hash = to; };
 
@@ -82,8 +99,13 @@ export default function App() {
 
   // ── Auth gate ─────────────────────────────────────────────────────────────
   if (!session) {
-    if (showLogin) return <LoginPage onBackToLanding={() => setShowLogin(false)} />;
-    return <LandingPage onNavigateToLogin={() => setShowLogin(true)} />;
+    if (showLogin) return <LoginPage onBackToLanding={() => { setShowLogin(false); window.location.hash = ''; }} />;
+    return <LandingPage onNavigateToLogin={() => { window.location.hash = 'login'; setShowLogin(true); }} />;
+  }
+
+  // ── First-login forced password reset ────────────────────────────────────
+  if (mustChangePassword) {
+    return <ForcePasswordResetPage />;
   }
 
   const role = (profile?.role ?? 'intern') as 'super_admin' | 'admin' | 'employee' | 'intern';

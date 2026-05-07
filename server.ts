@@ -867,8 +867,21 @@ app.post('/api/auth/login', async (req, res) => {
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ message: 'Invalid email or password' });
 
+    // ── Suspension gate ───────────────────────────────────────────────────
+    if (user.is_suspended) {
+      return res.status(403).json({
+        message: 'Your account is suspended. Please contact the Super Admin.',
+      });
+    }
+
     const token = signToken({ id: user.id, email: user.email, role: user.role });
-    return res.json({ token, role: user.role, id: user.id, email: user.email });
+    return res.json({
+      token,
+      role: user.role,
+      id: user.id,
+      email: user.email,
+      must_change_password: user.must_change_password ?? false,
+    });
   } catch (err: any) {
     console.error('[AUTH] login error:', err.message);
     return res.status(500).json({ message: 'Server error' });
@@ -951,6 +964,31 @@ app.post('/api/auth/change-password', verifyToken, async (req: AuthedRequest, re
     return res.json({ success: true, message: 'Password updated successfully' });
   } catch (err: any) {
     console.error('[AUTH] change-password error:', err.message);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/**
+ * POST /api/auth/first-login-reset
+ * Called when must_change_password is true.
+ * Does NOT require the old password — just the new one.
+ * On success, clears must_change_password = false.
+ */
+app.post('/api/auth/first-login-reset', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    const { newPassword } = req.body as { newPassword: string };
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ message: 'newPassword must be at least 8 characters' });
+    }
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE id = $2',
+      [newHash, req.userId]
+    );
+    console.log(`[AUTH] First-login password reset for user ${req.userId}`);
+    return res.json({ success: true, message: 'Password updated. You can now access the dashboard.' });
+  } catch (err: any) {
+    console.error('[AUTH] first-login-reset error:', err.message);
     return res.status(500).json({ message: 'Server error' });
   }
 });
@@ -1090,6 +1128,8 @@ app.get('/api/super-admin/admins', verifyToken, requireRole('super_admin'), asyn
     const { rows } = await pool.query(`
       SELECT
         u.id, u.email, u.role, u.created_at, u.node_limit, u.user_limit,
+        COALESCE(u.is_suspended, false)        AS is_suspended,
+        COALESCE(u.must_change_password, false) AS must_change_password,
         (SELECT COUNT(*)::int FROM users u2 WHERE u2.created_by = u.id) AS user_count,
         (SELECT COUNT(*)::int FROM nodes n  WHERE n.created_by  = u.id) AS node_count
       FROM users u
@@ -1249,13 +1289,14 @@ app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'
     if (password.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
 
     const hash = await bcrypt.hash(password, 12);
+    // must_change_password = true so the new admin is forced to reset on first login
     const { rows } = await pool.query(
-      'INSERT INTO users (email, password_hash, role, created_by) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
+      'INSERT INTO users (email, password_hash, role, created_by, must_change_password) VALUES ($1, $2, $3, $4, TRUE) RETURNING id, email, role, created_at',
       [email.toLowerCase().trim(), hash, 'admin', req.userId]
     );
-    console.log(`[SUPER-ADMIN] Created new admin: ${email}`);
+    console.log(`[SUPER-ADMIN] Created new admin: ${email} (must_change_password=true)`);
 
-    // Auto-send welcome email (non-blocking)
+    // Auto-send welcome email with the plain-text password (non-blocking)
     const cleanEmail = email.toLowerCase().trim();
     void sendWelcomeEmail(
       pool, cleanEmail, password,
@@ -1268,6 +1309,46 @@ app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'
     if (err.code === '23505') return res.status(409).json({ message: 'Email already exists' });
     console.error('[SUPER-ADMIN] create-admin error:', err.message);
     return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** PATCH /api/super-admin/admins/:id/suspend — toggle suspension */
+app.patch('/api/super-admin/admins/:id/suspend', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { suspended } = req.body as { suspended: boolean };
+    if (typeof suspended !== 'boolean') {
+      return res.status(400).json({ message: 'suspended (boolean) is required' });
+    }
+    const { rows } = await pool.query(
+      `UPDATE users SET is_suspended = $1 WHERE id = $2 AND role = 'admin' RETURNING id, email, is_suspended`,
+      [suspended, id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Admin not found' });
+    console.log(`[SUPER-ADMIN] Admin ${rows[0].email} suspension set to ${suspended}`);
+    return res.json(rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+/** DELETE /api/super-admin/admins/:id — permanently delete an admin */
+app.delete('/api/super-admin/admins/:id', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    // Prevent super admin from deleting themselves
+    if (id === req.userId) {
+      return res.status(400).json({ message: 'Cannot delete your own account' });
+    }
+    const { rows } = await pool.query(
+      `DELETE FROM users WHERE id = $1 AND role = 'admin' RETURNING id, email`,
+      [id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Admin not found' });
+    console.log(`[SUPER-ADMIN] Deleted admin: ${rows[0].email}`);
+    return res.json({ success: true, message: `Admin ${rows[0].email} deleted` });
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
   }
 });
 
