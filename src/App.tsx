@@ -14,9 +14,10 @@ import UserProfilePage from './components/UserProfilePage';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import SystemManagementPage from './components/SystemManagementPage';
 import SmtpSettingsPanel from './components/SmtpSettingsPanel';
+import DockerManagementPage from './components/DockerManagementPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings' | 'super-admin' | 'system-management' | 'system-settings';
+type Page = 'dashboard' | 'nodes' | 'node-detail' | 'terminal' | 'users' | 'profile' | 'settings' | 'super-admin' | 'system-management' | 'system-settings' | 'docker';
 
 interface NodeRecord {
   id: string;
@@ -69,6 +70,7 @@ export default function App() {
       else if (hash === 'super-admin')        { setPage('super-admin');        setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'system-management')  { setPage('system-management');  setSelectedNodeId(null); setTerminalNodeId(null); }
       else if (hash === 'system-settings')    { setPage('system-settings');    setSelectedNodeId(null); setTerminalNodeId(null); }
+      else if (hash === 'docker')              { setPage('docker');              setSelectedNodeId(null); setTerminalNodeId(null); }
       // #login → show login overlay (clears hash so the URL stays clean as /)
       else if (hash === 'login') {
         // If already logged in, redirect straight to dashboard
@@ -115,7 +117,7 @@ export default function App() {
       <div className="flex h-screen overflow-hidden font-display">
         {page !== 'terminal' && (
           <ErrorBoundary>
-            <Sidebar activePage={page} onNavigate={navigate} role={role} />
+            <Sidebar activePage={page} onNavigate={navigate} role={role} dockerEnabled={profile?.docker_enabled} />
           </ErrorBoundary>
         )}
 
@@ -197,6 +199,10 @@ export default function App() {
 
             {page === 'profile' && (
               <UserProfilePage onNavigate={navigate} />
+            )}
+
+            {page === 'docker' && (
+              <DockerManagementPage />
             )}
           </ErrorBoundary>
         </main>

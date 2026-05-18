@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Save, Loader2, Check, AlertCircle, Send, Mail, Zap } from 'lucide-react';
+import { Save, Loader2, Check, AlertCircle, Send, Mail, Zap, Wifi } from 'lucide-react';
 
 interface SmtpState {
   host: string; port: number; secure: boolean;
@@ -29,6 +29,7 @@ export default function SmtpSettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const flash = (ok: boolean, text: string) => {
@@ -96,6 +97,22 @@ export default function SmtpSettingsPanel() {
         : flash(false, `Failed: ${d.error}`);
     } catch (err: any) { flash(false, err.message); }
     setTesting(false);
+  };
+
+  // ── Test Connection (verify() only — no email sent) ────────────────────────
+  const testConnection = async () => {
+    setVerifying(true);
+    try {
+      const r = await fetch('/api/super-admin/settings/smtp/verify', {
+        method: 'POST', headers: H,
+        body: JSON.stringify(smtp),
+      });
+      const d = await r.json();
+      d.ok
+        ? flash(true, '✓ SMTP connection verified — credentials are correct!')
+        : flash(false, `Connection failed: ${d.error}`);
+    } catch (err: any) { flash(false, err.message); }
+    setVerifying(false);
   };
 
   // ── Load Hostinger Defaults ───────────────────────────────────────────────
@@ -246,7 +263,7 @@ export default function SmtpSettingsPanel() {
           </div>
 
           {/* Actions */}
-          <div className="flex gap-3 pt-1">
+          <div className="flex flex-wrap gap-3 pt-1">
             <button
               type="submit" disabled={saving}
               className="flex items-center gap-2 bg-[#DFFF00] text-black font-bold rounded-lg px-5 py-2 text-sm hover:bg-[#c8e600] disabled:opacity-50 transition-colors"
@@ -255,7 +272,15 @@ export default function SmtpSettingsPanel() {
               Save SMTP
             </button>
             <button
-              type="button" onClick={testSmtp} disabled={testing}
+              type="button" onClick={testConnection} disabled={verifying || saving}
+              className="flex items-center gap-2 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-bold rounded-lg px-5 py-2 text-sm hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+              title="Checks SMTP credentials without sending any email"
+            >
+              {verifying ? <Loader2 size={13} className="animate-spin" /> : <Wifi size={13} />}
+              {verifying ? 'Connecting…' : 'Test Connection'}
+            </button>
+            <button
+              type="button" onClick={testSmtp} disabled={testing || saving}
               className="flex items-center gap-2 border border-cyan-500/30 bg-cyan-500/10 text-cyan-400 font-bold rounded-lg px-5 py-2 text-sm hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
               title="Saves current values and sends a real test email to your account"
             >
@@ -263,9 +288,10 @@ export default function SmtpSettingsPanel() {
               {testing ? 'Sending…' : 'Send Test Email'}
             </button>
           </div>
-          <p className="text-[10px] text-gray-600">
-            "Send Test Email" saves the current form, then delivers a sample welcome email to your Super Admin address.
-          </p>
+          <div className="text-[10px] text-gray-600 space-y-0.5">
+            <p><span className="text-emerald-500/70 font-semibold">Test Connection</span> — verifies credentials (no email sent).</p>
+            <p><span className="text-cyan-500/70 font-semibold">Send Test Email</span> — saves the form and delivers a sample email to your Super Admin address.</p>
+          </div>
         </div>
       </form>
 

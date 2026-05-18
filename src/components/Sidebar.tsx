@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   LayoutDashboard, Database, Shield, LifeBuoy, Power,
-  Plus, Loader2, Users, UserCircle, Menu, X, Crown, Settings,
+  Plus, Loader2, Users, UserCircle, Menu, X, Crown, Settings, Boxes,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AddNodeModal, { NodeFormData } from './AddNodeModal';
@@ -26,6 +26,7 @@ interface SidebarProps {
   activePage: string;
   onNavigate: (to: string) => void;
   role: 'super_admin' | 'admin' | 'employee' | 'intern';
+  dockerEnabled?: boolean;
 }
 
 interface NavItemProps {
@@ -61,7 +62,7 @@ function NodeStatusDot({ status }: { status: NodeRecord['status'] }) {
   return <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />;
 }
 
-export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) {
+export default function Sidebar({ activePage, onNavigate, role, dockerEnabled }: SidebarProps) {
   const { signOut, session, profile } = useAuth();
   // ── Nodes from shared context — no local fetch loop ──────────────────────
   const { nodes: ctxNodes, refresh } = useNodes();
@@ -146,6 +147,11 @@ export default function Sidebar({ activePage, onNavigate, role }: SidebarProps) 
         )}
 
         <NavItem icon={UserCircle} label="User Profile" active={activePage === 'profile'} onClick={() => navigate('profile')} collapsed={collapsed} />
+
+        {/* Docker Management — visible for admin/super_admin always, or when docker_enabled=true */}
+        {(role === 'admin' || role === 'super_admin' || dockerEnabled) && (
+          <NavItem icon={Boxes} label="Docker" active={activePage === 'docker'} onClick={() => navigate('docker')} collapsed={collapsed} />
+        )}
       </nav>
 
       {/* Fleet status */}

@@ -1,328 +1,320 @@
-# Neon Sentry: How I Built a Futuristic Cyber-Security Command Center Using Agentic AI Development
+# Neon Sentry: Agentless Infrastructure Monitoring for Modern DevOps Teams
 
-**A full-stack engineering story about agent-less server monitoring, multi-tenant SaaS architecture, and what happens when you let multiple AI systems collaborate to build something real.**
-
----
-
-## Introduction
-
-There's a moment every developer knows well — that 2 AM feeling when you're SSH'd into three different servers simultaneously, copying metrics into a spreadsheet, wondering why infrastructure tooling in the year we live in still feels like it was designed in 2009. I had that moment one too many times. And instead of complaining about it, I built something.
-
-This is the story of Neon Sentry: a high-performance, agent-less server monitoring and orchestration platform that combines live telemetry, Docker management, and a browser-based SSH terminal into a single futuristic dashboard. But more than just a product story, this is a case study in *how* I built it — using a multi-AI development workflow that I now consider one of the most powerful engineering approaches I've ever adopted.
-
-By the time you finish reading this, you'll understand not just the architecture of a real-world SaaS monitoring platform, but also what it looks like to let Gemini, Claude, ChatGPT, and DeepSeek collaborate as a kind of distributed engineering team — each with different strengths, each serving a different layer of the development lifecycle.
-
-Let's start from the beginning.
+**Category:** Engineering · Platform Overview  
+**Read time:** ~15 min
 
 ---
 
-## The Idea Behind the Project
+## Table of Contents
 
-The idea came from frustration. Not with any single tool, but with the fragmented ecosystem of tools that system administrators are expected to juggle daily. You have one dashboard for CPU metrics, another for Docker container health, a separate terminal window for SSH access, and yet another tool for alerting. Each has its own authentication, its own learning curve, its own cost.
-
-The industry calls this "tool fatigue," and it's real. The deeper problem isn't just convenience — it's security. Every agent you install on a target server is a new attack surface. Every third-party monitoring service you connect to is another place your infrastructure credentials might live. For teams operating in regulated environments, or for any organization that takes data sovereignty seriously, these aren't minor concerns.
-
-I wanted to build what security engineers call a **Single Pane of Glass** — one unified interface where you can see everything that matters, control everything you need, and do it all without leaving a footprint on the servers you're monitoring. No agents. No bloat. Just a secure SSH tunnel and a clean, modern dashboard.
-
-I called it **Neon Sentry**.
-
----
-
-## Research & UI Inspiration
-
-Before writing a single line of code, I spent time on Dribbble looking at how other people had imagined the future of infrastructure tooling. Most enterprise dashboards are built for function over form — they look like they haven't been redesigned since jQuery was cutting-edge. But the cyberpunk and cyber-security design community on Dribbble had a completely different aesthetic: dark backgrounds, neon accent colors, high-density data layouts, geometric grids. Futuristic but legible.
-
-That visual direction felt right. A server monitoring platform should feel like a mission control room, not an Excel spreadsheet.
-
-With a strong aesthetic direction in mind, I turned to **Stitch — Design with AI** to generate initial layout concepts and UI component ideas. Rather than building wireframes from scratch, I used Stitch to rapidly prototype how a high-density monitoring dashboard could be structured — how cards could be arranged, how terminal panels could coexist with metric graphs, how a sidebar navigation hierarchy might reflect the multi-tenant organizational structure I had in mind.
-
-The visual result was something I described internally as "a NOC dashboard from a near-future thriller." Dark theme, electric cyan accents, monospace typography for metric values, and a layout dense enough to surface critical information at a glance without being overwhelming.
+1. [Introduction](#1-introduction)
+2. [Platform Overview](#2-platform-overview)
+3. [Core Features](#3-core-features)
+4. [System Architecture](#4-system-architecture)
+5. [Technology Stack](#5-technology-stack)
+6. [Engineering Challenges Solved](#6-engineering-challenges-solved)
+7. [Deployment Architecture](#7-deployment-architecture)
+8. [Performance Optimizations](#8-performance-optimizations)
+9. [Future Roadmap](#9-future-roadmap)
+10. [Conclusion](#10-conclusion)
 
 ---
 
-## Planning the System Architecture
+## 1. Introduction
 
-Here is where the project shifted from idea to engineering. And here is where AI became not just a helper, but a genuine co-architect.
+Infrastructure monitoring has long been fragmented. Teams cobble together multiple tools — one for metrics, another for container management, a separate terminal client for SSH access — each with its own authentication model, deployment overhead, and operational surface area. The result is tooling sprawl that slows incident response and increases cognitive load across engineering teams.
 
-I took my rough ideas into **Google AI Studio with Gemini 1.5 Pro**. Not to generate code — that would come later — but to think. I described the platform I wanted to build in natural language: agent-less monitoring, SSH-based telemetry collection, Docker management, multi-tenant support, role-based access control, browser-based terminal access. I asked Gemini to help me think through the architecture, identify design challenges I hadn't considered, and refine my mental model into something technically coherent.
+Neon Sentry is built to consolidate this stack. It is an agentless, multi-tenant SaaS platform that provides real-time server monitoring, Docker container orchestration, and browser-based SSH terminal access — all within a single, unified interface.
 
-What came back wasn't just a plan — it was a structured engineering document. Gemini helped me think through the master-agent proxy model, the implications of tenant isolation at the database level, the WebSocket streaming architecture needed for real-time telemetry, and the security risks of storing SSH credentials in a multi-tenant system.
+## Live Platform
 
-One of Gemini's most valuable contributions was asking me the right questions. When I described multi-tenant support, it asked: *How do you want to handle credential isolation? Will Super Admins have visibility across all organizations, or are they scoped?* That single question led to the four-tier role hierarchy that became the backbone of Neon Sentry's access model: **Super Admin → Admin → Employee → Intern**.
+🌐 Website: https://servers.myaccess.cloud  
+🔐 Secure Browser SSH Access · Real-Time Monitoring · Docker Management
 
-Google AI Studio also helped me refine the prompts I would later use when moving into implementation. It essentially acted as a technical editor, transforming my casual descriptions into precise, structured specifications that could be handed off to a code generation model.
+### The Problem with Traditional Monitoring
 
----
+Conventional monitoring systems require deploying and maintaining agents on every monitored host. This introduces deployment complexity, version drift, security exposure on the host OS, and ongoing maintenance overhead. When server counts scale, agent-based systems become operationally expensive to manage. Team-level access control is often bolted on as an afterthought rather than built into the platform architecture.
 
-## AI-Assisted Development Workflow
+> **Neon Sentry eliminates the agent entirely.** Telemetry collection, SSH access, and container management are all brokered through the platform's backend using standard SSH connections — requiring only network access and valid credentials, not software installed on the target host.
 
-This is the part of the story I'm most excited to tell, because I think it represents something genuinely new in how software gets built.
+### Agentless by Design
 
-Once I had a solid architectural plan, I moved into **Antigravity**, an agentic editor designed for multi-model AI development. Inside Antigravity, the workflow split into two tracks: **Gemini** handled planning, reasoning, and architectural decisions at the feature level. **Claude 3.5 Sonnet** handled implementation — writing the actual code.
-
-This separation was intentional and powerful. Gemini is exceptional at high-level reasoning, at thinking through trade-offs, at asking "but what happens when this edge case occurs?" Claude 3.5 Sonnet, on the other hand, writes clean, idiomatic code with strong contextual consistency. It understands that when you're building a WebSocket-based telemetry system, the error handling patterns need to be consistent across every event emitter. It remembers architectural decisions made earlier in the session.
-
-For debugging, UI adjustments, and optimization passes, I also pulled in **ChatGPT** and **DeepSeek**. ChatGPT was particularly useful for explaining obscure Node.js behavior and suggesting alternative approaches when I hit walls. DeepSeek excelled at low-level debugging — feeding it a stack trace and getting back a precise root cause analysis was remarkably reliable.
-
-What I built was effectively an **agentic AI development team**: each model playing to its strengths, with me as the orchestrator directing the workflow, reviewing outputs, and making final architectural calls. This is what "Agentic AI Development" means in practice — not replacing the developer, but dramatically expanding what a single developer can build and at what speed.
+The agentless model means monitored servers remain unmodified. Neon Sentry's backend establishes SSH sessions, executes system commands, parses Linux telemetry output, and streams results to connected clients in real time. There is no persistent process running on monitored infrastructure, and no additional attack surface introduced on the host.
 
 ---
 
-## Tech Stack Breakdown
+## 2. Platform Overview
 
-Every technology choice in Neon Sentry was deliberate. Let me walk through the reasoning.
+Neon Sentry is a purpose-built platform combining five capabilities that infrastructure teams commonly manage through separate tooling:
 
-**React.js with Vite and Tailwind CSS** formed the frontend foundation. Vite's development server and build performance are simply superior to Create React App for a project of this complexity, and Tailwind allowed rapid UI iteration without context-switching into a separate CSS file. For animation, **Framer Motion** provided the smooth transitions and entrance animations that give the dashboard its polished, futuristic feel — metric cards that slide in, terminal panels that expand with spring physics. **xterm.js** powered the browser-based SSH terminal, and **Recharts** handled the real-time telemetry graphs.
+| Capability | Description |
+|---|---|
+| **Real-Time Monitoring** | Live CPU, memory, disk, and network telemetry streamed via WebSocket to connected dashboards |
+| **Docker Orchestration** | View, start, stop, restart containers and inspect logs and resource usage |
+| **Browser SSH Terminal** | Full interactive terminal access to any registered server, streamed securely through the browser |
+| **Multi-Tenant SaaS** | Organisation-scoped data isolation with team management and role-based access controls built in |
+| **Security by Default** | AES-256 encrypted credential storage, JWT-authenticated APIs, and encrypted SSH tunneling throughout |
+| **WebSocket Infrastructure** | Socket.io-powered real-time communication layer for efficient, low-latency metric delivery |
 
-On the backend, **Node.js with Express** was the obvious choice — fast, event-driven, and excellent for WebSocket workloads. The **SSH2** and **Node-SSH** libraries handled the core tunneling logic. **Socket.io** managed real-time bidirectional communication between the backend and all connected dashboard clients. For authentication, **JWT** and **Bcrypt** were the standard choices for a reason: stateless, scalable, and battle-tested.
-
-The database is **PostgreSQL**, running as a standalone Dockerized instance. The decision to move away from a managed service to a self-hosted PostgreSQL became one of the most consequential architectural choices of the entire project — more on that in the challenges section.
-
----
-
-## Frontend Development
-
-The frontend of Neon Sentry is designed around what I call "high-density information architecture." Every pixel is intentional. The main dashboard is a grid of monitoring cards, each representing a server node, surfacing CPU usage, RAM consumption, disk utilization, and network I/O at a glance. Color coding communicates health status instantly — green for nominal, amber for warning, red for critical — without requiring the user to read a number.
-
-Building this with React required careful attention to performance. When you have twenty server nodes each emitting telemetry updates every few seconds, you're dealing with a high-frequency state update problem. Naive React patterns would cause catastrophic re-rendering. The solution was architectural: telemetry data streams were managed through a dedicated WebSocket context, with individual metric components subscribing only to their own node's data stream. This kept re-renders scoped and performant.
-
-The **NOC Monitoring Mode** deserves special mention. This was a feature inspired by Network Operations Centers — large rooms where screens display rotating infrastructure views for teams doing continuous monitoring. In Neon Sentry, NOC Mode automatically cycles through server nodes in full-screen view on a configurable interval, making it suitable for mounting on a dedicated monitor in a server room or operations center.
-
-The browser-based terminal, powered by **xterm.js**, presented interesting UX challenges. Getting terminal input focus management right — ensuring that keyboard shortcuts behave correctly, that paste operations work as expected, and that the terminal doesn't capture input when the user is interacting with other dashboard elements — required careful event handling. The terminal panel also needed to coexist visually with the monitoring dashboard, which meant designing a resizable split-panel layout that maintained clean proportions across different screen sizes.
+The platform is deployed as a Dockerized stack on a VPS, with Nginx handling reverse proxying and TLS termination. PostgreSQL serves as the primary data store for all organisational, user, server, and credential data.
 
 ---
 
-## Backend Engineering
+## 3. Core Features
 
-The backend is where the real engineering lives. Neon Sentry's core architecture is what I call a **master-agent hybrid proxy** — but it's important to clarify the "agent" terminology here, because it's different from the traditional monitoring agent model.
+### Real-Time Monitoring
 
-There are no agents installed on target servers. Instead, the Neon Sentry backend acts as an SSH orchestration layer. When a user adds a server node to their organization, they provide the SSH connection credentials — hostname, port, username, and either a password or private key. These credentials are stored **encrypted with AES-256** in the PostgreSQL database. When telemetry is requested, the backend opens an SSH connection to the target server, executes a series of shell commands (`top`, `df`, `free`, `ifconfig`/`ip`, `docker ps`), parses the output, and streams the results back to the frontend via WebSocket.
+Neon Sentry continuously polls registered servers via SSH and delivers live telemetry to the dashboard. Metrics are collected, parsed, and streamed with minimal latency, giving teams an accurate and current view of infrastructure health.
 
-This architecture has a profound security advantage: the target server never needs to have any ports opened beyond SSH (port 22). There's no agent process, no inbound connection, no persistent listener. The monitoring platform is entirely pull-based from the SSH perspective.
+- **CPU Monitoring** — Per-core and aggregate CPU utilisation, idle percentage, and usage trends via `/proc/stat` parsing
+- **RAM Monitoring** — Total, used, free, and cached memory from `/proc/meminfo`, with live percentage tracking
+- **Disk Usage** — Filesystem capacity and utilisation per mount point using `df` output parsing
+- **Network Statistics** — Inbound and outbound byte rates per interface, derived from `/proc/net/dev`
+- **Live Telemetry** — All metrics are pushed via Socket.io to subscribed clients as they are collected, with no polling required from the frontend
 
-Parsing Linux command output turned out to be one of the most underestimated engineering challenges of the project. The output of `df -h` or `free -m` varies subtly across different Linux distributions and kernel versions. A column that appears in a fixed position on Ubuntu 22.04 might shift on CentOS or Alpine Linux. Building reliable parsers required extensive regex work and a test suite built against real output samples from multiple distributions.
+### Docker Management
 
-Here's a simplified example of the kind of parsing logic involved:
+Container visibility and control are first-class features. Neon Sentry uses the Docker socket on remote servers (accessed over SSH) to enumerate containers and expose management controls through the UI.
 
-```javascript
-function parseCpuUsage(topOutput) {
-  const cpuLine = topOutput.split('\n').find(line => line.startsWith('%Cpu'));
-  if (!cpuLine) return null;
-  
-  const idleMatch = cpuLine.match(/(\d+\.\d+)\s+id/);
-  if (!idleMatch) return null;
-  
-  const idle = parseFloat(idleMatch[1]);
-  return parseFloat((100 - idle).toFixed(1));
-}
+- List all containers with status, image, uptime, and port mappings
+- Start, stop, and restart containers with immediate UI feedback
+- Stream and view container logs in real time
+- Monitor per-container CPU and memory resource consumption
+
+### Browser-Based SSH Terminal
+
+Neon Sentry embeds a fully functional terminal directly in the browser using `xterm.js`. Each terminal session is backed by a live SSH connection brokered by the backend, with the terminal stream transported over WebSocket.
+
+- Full interactive shell access from the browser — no local SSH client required
+- Sessions are authenticated through the platform's credential store; credentials are never exposed to the frontend
+- Terminal resize events are propagated to the remote PTY in real time
+- Multiple concurrent sessions are supported per user and per server
+
+### Multi-Tenant Architecture
+
+The platform is built for SaaS-grade multi-tenancy from the ground up. All data — servers, users, credentials, telemetry — is scoped to an organisation. Cross-organisation data access is prevented at the query level, not just the UI layer.
+
+- Organisation-based data isolation enforced at the database query layer
+- Team members are associated with a single organisation and inherit access accordingly
+- Organisation administrators can onboard team members and assign roles without platform intervention
+
+### Role-Based Access Control
+
+Neon Sentry implements a four-tier RBAC model that maps to common organisational structures:
+
+#### Super Admin
+- Full platform access
+- Manage all organisations
+- Platform-level configuration
+- User provisioning across tenants
+
+#### Admin
+- Manage servers and credentials
+- Add/remove team members
+- Assign roles within the organisation
+- Full monitoring access
+
+#### Employee
+- View monitoring dashboards
+- Access SSH terminal
+- Docker management access
+- Read-only credential view
+
+#### Intern
+- Dashboard view access only
+- No SSH terminal access
+- No Docker control actions
+- No credential visibility
+
+### Security Features
+
+Security is a foundational constraint, not a feature layer. Neon Sentry protects sensitive credentials and communications at every boundary.
+
+- **AES-256 Credential Encryption** — SSH credentials are encrypted before database storage; decryption occurs in-memory only at connection time
+- **JWT Authentication** — All API endpoints are gated by JWT middleware with role validation on sensitive operations
+- **Encrypted SSH Storage** — Private keys and passwords are never stored or transmitted in plaintext
+- **TLS Termination** — Nginx terminates HTTPS at the edge; all backend communication remains on the internal Docker network
+- **Org-Level Data Isolation** — Every database query includes an explicit `organisation_id` filter
+- **Role-Gated API Endpoints** — Sensitive operations enforce role checks server-side, independent of UI state
+
+### Real-Time WebSocket Infrastructure
+
+All live data in Neon Sentry flows through a Socket.io layer built on top of the Node.js backend. Clients subscribe to server-specific rooms and receive metric updates as they arrive from the SSH polling loop. Terminal I/O is routed through the same transport, ensuring consistent behaviour across both monitoring and interactive features.
+
+---
+
+## 4. System Architecture
+
+Neon Sentry's architecture is composed of four primary layers: the frontend client, the Node.js backend, the SSH orchestration layer, and the PostgreSQL database. These layers communicate over well-defined interfaces, with the WebSocket layer threading real-time data from backend to client.
+
+```
+[ Browser Client ]     React + Vite + xterm.js + Recharts
+        ↕  WebSocket (Socket.io)  ↕  REST API (JWT)
+[ Backend Layer ]      Node.js + Express.js + Socket.io
+        ↕  SSH Sessions (SSH2 / Node-SSH)
+[ SSH Orch. Layer ]    Connection Pool · Command Exec · Stream Parser
+        ↕  Direct SSH over TCP
+[ Monitored Hosts ]    Linux VPS / Ubuntu Servers (no agents installed)
+
+[ Database ]           PostgreSQL — all persistent state
+[ Reverse Proxy ]      Nginx — TLS termination, routing to backend
 ```
 
-Simple in principle, but multiply this by every metric, across every Linux variant, with edge cases for containerized environments, and you begin to understand why robust parsing was a multi-week effort.
+### Frontend Architecture
+
+The frontend is a React single-page application built with Vite. Recharts handles metric visualisations, `xterm.js` renders the terminal, and Framer Motion drives UI transitions. The frontend communicates with the backend exclusively through the REST API (for CRUD operations) and Socket.io (for real-time telemetry and terminal streams).
+
+### Backend Architecture
+
+The backend is a Node.js application running Express.js. It exposes REST endpoints for authentication, server management, and user administration. Socket.io runs on the same Node.js process, managing namespaced rooms per server. The backend maintains a connection pool of SSH sessions to avoid repeated handshake overhead per metric collection cycle.
+
+### SSH Orchestration Layer
+
+At the core of the agentless model is the SSH orchestration layer. For each registered server, the backend schedules periodic SSH command executions — reading from `/proc` and `/sys` filesystems and calling Docker CLI commands. Results are parsed into structured objects and emitted over Socket.io. For terminal sessions, a persistent PTY is allocated over SSH and its I/O is piped directly to the WebSocket stream.
+
+### Database Architecture
+
+PostgreSQL is the sole data store. Tables are organised around core domain entities: `organisations`, `users`, `servers`, `credentials`, and `roles`. Foreign key constraints enforce organisation-level scoping. Credential data is stored encrypted; no plaintext sensitive values are written to the database.
 
 ---
 
-## Database Design & Multi-Tenant Security
+## 5. Technology Stack
 
-The multi-tenant architecture is the backbone of Neon Sentry's SaaS model, and it was designed from first principles rather than bolted on afterward.
+### Frontend
 
-Every data entity in the system — users, server nodes, Docker configurations, SMTP settings — carries a `organization_id` foreign key. All queries, at every layer, filter by this key. This is the first line of tenant isolation. But the second line is more interesting: a `created_by` tenant-linking system that creates an ownership chain for every record, enabling the Super Admin to perform cross-tenant queries while maintaining the guarantee that regular users can never see data outside their organization.
+| Package | Purpose |
+|---|---|
+| React.js | UI component model and rendering |
+| Vite | Build tooling and development server |
+| Tailwind CSS | Utility-first styling |
+| Framer Motion | Animations and UI transitions |
+| xterm.js | In-browser terminal emulation |
+| Recharts | Metric charting and visualisation |
 
-The four-tier role system governs what each user level can do:
+### Backend
 
-- **Super Admin** — Platform-level access. Can create and manage organizations, set user quotas, and view cross-tenant system health. This is the SaaS operator's interface.
-- **Admin** — Organization-level access. Can add server nodes, manage team members, configure SMTP settings, and view all monitoring data within their organization.
-- **Employee** — Operational access. Can view monitoring dashboards, access terminals, and manage Docker containers.
-- **Intern** — Read-only access. Can view dashboards but cannot execute commands or access terminal functionality.
+| Package | Purpose |
+|---|---|
+| Node.js | Runtime — event-driven I/O model |
+| Express.js | HTTP API framework |
+| Socket.io | WebSocket-based real-time transport |
+| SSH2 | Low-level SSH protocol implementation |
+| Node-SSH | Higher-level SSH session management |
 
-Enforcing this hierarchy at the database level — rather than just at the application layer — was critical for genuine security. Row-level security and carefully designed PostgreSQL functions ensure that even a compromised application layer cannot expose cross-tenant data.
+### Database
 
----
+| Package | Purpose |
+|---|---|
+| PostgreSQL | Relational data store for all platform state |
 
-## Real-Time Monitoring System
+### Infrastructure
 
-The real-time monitoring system is built on a **Socket.io** event architecture with server-side polling intervals managed by the Node.js backend. When a user opens a server node's detail view, the frontend emits a `subscribe` event with the node's identifier. The backend registers this subscription, initiates (or joins) a polling loop for that node, and begins streaming telemetry events back to the client.
+| Component | Purpose |
+|---|---|
+| Docker | Application containerisation |
+| Docker Compose | Multi-service orchestration |
+| Nginx | Reverse proxy and TLS termination |
+| Ubuntu VPS | Hosting environment |
 
-The polling loop itself is managed as a per-node process: a setInterval that executes the SSH telemetry commands, parses the results, and emits them over the socket. When the last subscriber unsubscribes from a node, the polling loop is cleared. This prevents orphaned background processes from accumulating and consuming resources.
-
-Handling disconnections gracefully was essential. Network drops, browser tab closes, and session timeouts all needed to trigger clean subscription teardown. Socket.io's built-in disconnect event handling, combined with a subscription registry in the backend, ensured that no polling loops outlived their subscribers.
-
-The React infinite loop problem emerged here in an interesting way. Early versions of the telemetry subscription logic used `useEffect` hooks with dependency arrays that inadvertently included functions that were being recreated on every render. This caused a cascade: effect fires → socket subscription created → state updates → re-render → new function reference created → effect fires again. The fix required wrapping all socket event handlers in `useCallback` with carefully audited dependency arrays, and separating subscription management from rendering logic entirely.
-
----
-
-## Docker Orchestration System
-
-Docker management was a feature I knew users would love but underestimated how complex it would be to implement cleanly. The challenge is that Docker's command-line interface, while powerful, is not designed to be parsed programmatically. `docker ps --format json` helps, but container status, resource usage (`docker stats`), and log streaming each require different commands with different output formats and different latency profiles.
-
-The Neon Sentry Docker orchestration layer executes Docker commands over the same SSH tunnel used for system telemetry, parsing the results into a normalized container object model. Users can view all running containers, see CPU and memory consumption per container, start/stop/restart containers, and stream container logs — all from the browser.
-
-One architectural decision that paid off significantly: keeping Docker operations strictly asynchronous and user-initiated. Rather than streaming `docker stats` continuously for every container (which would be prohibitively expensive at scale), the dashboard polls container status on a configurable interval and only streams logs and stats for containers the user has explicitly opened. This keeps the SSH session overhead manageable even for hosts running dozens of containers.
-
----
-
-## Browser-Based SSH Terminal
-
-The browser-based terminal is the feature users react to most viscerally. Opening a full terminal session to a remote server from a browser tab — no SSH client installed, no VPN required — still feels like magic even to experienced engineers.
-
-Under the hood, the architecture is elegant: **xterm.js** in the browser renders a terminal emulator, handling ANSI escape codes, cursor positioning, and color rendering. Keystrokes are captured and sent over a Socket.io connection to the Node.js backend, which forwards them to an SSH channel opened via the **SSH2** library. Output from the SSH channel flows back through Socket.io to xterm.js, which renders it in the terminal.
-
-```javascript
-// Backend: bridge between WebSocket and SSH channel
-socket.on('terminal:input', ({ nodeId, data }) => {
-  const session = activeSessions.get(nodeId);
-  if (session && session.stream) {
-    session.stream.write(data);
-  }
-});
-
-sshStream.on('data', (data) => {
-  socket.emit('terminal:output', { nodeId, data: data.toString() });
-});
-```
-
-The subtle engineering work is in session lifecycle management: ensuring that terminal sessions are tied to authenticated user sessions, that they terminate cleanly when the browser tab closes, and that the SSH connection is properly closed and the socket room cleaned up when the user navigates away.
-
-Terminal sessions are also role-gated. Intern accounts receive a dashboard-only view with no terminal access. Employee and above accounts can open terminal sessions, but terminal activity is scoped to their organization's registered nodes. No lateral movement between organizations is possible, even theoretically, because node lookup is always filtered by organization context.
+The stack is deliberately lean. Node.js provides the right primitive model for I/O-heavy, event-driven workloads like SSH streaming and WebSocket management. React with Vite gives fast development iteration and strong ecosystem support for the visualisation libraries the platform requires. PostgreSQL provides the relational integrity and query expressiveness needed for multi-tenant data scoping.
 
 ---
 
-## Authentication & Security
+## 6. Engineering Challenges Solved
 
-Security was never an afterthought in Neon Sentry — it was baked into every architectural decision from the start.
+### Multi-Tenant Isolation
 
-**JWT authentication** handles stateless session management. Access tokens are short-lived; refresh token logic handles session persistence without long-lived credentials sitting in local storage. Password storage uses **Bcrypt** with a cost factor calibrated for modern hardware — secure without introducing login latency.
+Ensuring complete data isolation between organisations required systematic enforcement at the database query layer. Every query that returns user, server, or credential data includes an explicit `organisation_id` filter. API middleware validates that the requesting user belongs to the organisation referenced in the route, preventing horizontal privilege escalation even if a valid JWT is misused.
 
-The most sensitive data in the system is SSH credentials. Storing private keys and passwords in a database is inherently risky, but it's unavoidable for an automated monitoring platform. The mitigation is **AES-256 encryption** applied to all credential fields before they're written to the database. The encryption key lives in environment configuration, separate from the database. A database breach alone cannot expose plaintext SSH credentials.
+### Linux Telemetry Parsing
 
-Tenant isolation at the query level means that even if an application-layer bug allowed an unauthenticated query to reach the database, row-level filtering would ensure only records belonging to the authenticated user's organization could be returned. Defense in depth.
+Reading metrics from `/proc` and `/sys` filesystems over SSH requires careful parsing of raw Linux virtual file output. CPU utilisation, for example, requires two successive reads of `/proc/stat` with a defined interval to compute delta values. The backend handles this stateful sampling correctly for each server independently, without conflating metric windows across different hosts.
 
-SMTP configuration — used for automated onboarding emails — is stored per-organization and encrypted at rest. Each organization can configure their own email sending infrastructure, which means Super Admins never need access to individual organizations' email credentials.
+### WebSocket Optimization
+
+Naive real-time metric delivery results in an unbounded message rate as server count grows. Neon Sentry implements per-server metric batching and rate limiting on the Socket.io emission layer. Clients receive batched updates on a defined interval rather than an event per system call, dramatically reducing message volume under load without meaningfully degrading perceived data freshness.
+
+### React Re-Render Optimization
+
+Continuously arriving metric data will cause performance degradation in React applications if component update boundaries are not managed carefully. Neon Sentry uses memoisation (`React.memo`, `useMemo`, `useCallback`) and separates telemetry-driven state from structural UI state to ensure only chart and metric components re-render on each update cycle, leaving the rest of the dashboard tree untouched.
+
+### Secure SSH Credential Handling
+
+SSH credentials — including private keys — must be stored persistently to support automatic metric collection without repeated manual input. All credentials are encrypted with AES-256 before database insertion and decrypted in memory only at the moment an SSH connection is established. Decrypted credential material is never logged, cached in plaintext, or transmitted beyond the backend process boundary.
+
+### Real-Time Monitoring Scalability
+
+As the number of registered servers in an organisation grows, the polling loop must scale without bottlenecking on a shared thread. The Node.js event loop handles SSH I/O asynchronously, and each server's polling cycle operates independently. Connection pooling ensures that established SSH sessions are reused across polling intervals, avoiding the latency and overhead of repeated connection establishment.
 
 ---
 
-## Deployment Architecture
+## 7. Deployment Architecture
 
-Neon Sentry runs on a **self-hosted Ubuntu 22.04 VPS**. The deployment stack is fully containerized with **Docker Compose**, which orchestrates the Node.js backend and the PostgreSQL database as linked services.
+The entire platform stack is defined as a Docker Compose application, enabling reproducible, environment-consistent deployments. The composition includes three core services:
 
 ```yaml
-services:
-  backend:
-    build: .
-    ports:
-      - "5000:5000"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - JWT_SECRET=${JWT_SECRET}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-    depends_on:
-      - postgres
-
-  postgres:
-    image: postgres:15-alpine
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_DB=neonsentry
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-
-volumes:
-  pgdata:
+# Service topology
+postgres   — PostgreSQL 15 · persistent volume · internal network only
+backend    — Node.js app · port 4000 internal · depends_on: postgres
+nginx      — Reverse proxy · binds :80 and :443 · proxies to backend
 ```
 
-The frontend is a static build served directly by the Express backend — no separate web server process required. The Express server serves the React build from a `/public` directory for all non-API routes, and handles API requests at `/api/*`. This single-process architecture simplifies deployment and keeps operational overhead low.
+- **PostgreSQL Container** — Runs on an isolated internal Docker network. The data directory is persisted to a named volume, surviving container restarts and redeployments.
+- **Backend Container** — Built from the application source. Environment variables supply database credentials, JWT secrets, and the AES encryption key. The container is not exposed directly to the host network.
+- **Nginx Reverse Proxy** — The only publicly exposed service. Handles TLS termination using Let's Encrypt or custom CA certificates, and forwards requests to the backend container over the internal network. WebSocket upgrade headers are explicitly proxied to support Socket.io connections.
 
-A reverse proxy (Nginx) sits in front of the Express server, handling TLS termination via Let's Encrypt certificates. All traffic is HTTPS. WebSocket connections upgrade correctly through the Nginx proxy with appropriate `Upgrade` and `Connection` header configuration.
-
----
-
-## Challenges Faced
-
-No engineering story worth reading is without its war stories. Here are the challenges that genuinely tested me.
-
-**The Supabase Migration Crisis.** The original version of Neon Sentry used Supabase as the managed PostgreSQL backend. Supabase's Row Level Security (RLS) is powerful, but implementing the Super Admin cross-tenant query logic required recursive RLS policy checks that triggered deadlocks under certain query patterns. The policies were checking organization membership, which required querying a table that was itself protected by an RLS policy — a circular dependency that Supabase's automatic policy enforcement couldn't resolve cleanly. After several days attempting increasingly complex workarounds, the decision was made: migrate to standalone PostgreSQL.
-
-**React Infinite Loops.** The telemetry polling architecture created subtle React infinite loop scenarios that were difficult to debug because they didn't always manifest immediately. An effect hook subscribing to a socket event, with a dependency on a callback function, with that callback defined inline in the component — a classic setup for an infinite re-render cycle. The fix required not just adding `useCallback`, but a systematic audit of every component in the monitoring system to ensure effect dependencies were correctly specified.
-
-**Linux Command Output Parsing.** This one was humbling. I assumed that Linux command output was standardized. It is not. `df -h` on a Raspberry Pi with a custom kernel produces subtly different column alignment than on a standard Ubuntu server. `free -m` output changed between kernel versions. Building parsers that worked reliably required collecting real-world output samples from a dozen different Linux configurations and iterating the regex patterns against them.
-
-**Multi-Tenant Isolation at Scale.** Enforcing strict tenant isolation while supporting a Super Admin who needs cross-tenant visibility is a genuinely hard architectural problem. The naive solution — just filter by `organization_id` everywhere — breaks down for Super Admin queries. The sophisticated solution requires a query architecture that is tenant-context-aware at the function level, with Security Definer functions in PostgreSQL handling the elevated-privilege operations that Super Admin workflows require.
+The entire stack deploys with a single `docker compose up -d` command. Updates are performed by rebuilding the backend image and restarting the service without downtime to the database or proxy layers.
 
 ---
 
-## How I Solved Them
+## 8. Performance Optimizations
 
-The Supabase migration, counterintuitively, turned out to be one of the best things that happened to the project. Moving to standalone PostgreSQL gave complete control over the database schema, the RLS policies, and the Security Definer function implementations. Instead of working within Supabase's abstractions, I could write precise PostgreSQL functions that executed with appropriate privilege levels for Super Admin operations, bypassing RLS where needed while maintaining strict isolation for all other users.
+Real-time monitoring platforms face specific performance constraints: high message rates, persistent connections, and CPU-intensive parsing cycles. Neon Sentry addresses these at each layer of the stack.
 
-```sql
--- Security Definer function for Super Admin cross-tenant node listing
-CREATE OR REPLACE FUNCTION get_all_nodes_admin()
-RETURNS SETOF nodes
-LANGUAGE sql
-SECURITY DEFINER
-AS $$
-  SELECT * FROM nodes ORDER BY created_at DESC;
-$$;
-```
-
-The `SECURITY DEFINER` attribute causes the function to execute with the privileges of the function owner, not the calling user — effectively a controlled privilege escalation that only occurs through a defined, auditable code path.
-
-The React infinite loop fixes required developing a mental model I now apply to every WebSocket-integrated React component: **subscription effects must be isolated from data-processing effects**, and every function referenced in an effect's dependency array must be wrapped in `useCallback` with its own correctly specified dependencies. Once this pattern was established and applied consistently, the loop problems disappeared.
-
-For the Linux output parsing, the solution was building a small internal library of parser functions with multiple parsing strategies per metric: a primary strategy for the most common output format, and fallback strategies for known variants. Each parser also included a validation step that sanity-checked the parsed values — a CPU usage value above 100% or a negative memory figure indicates a parsing failure, not a real metric value.
+| Optimization | Layer | Description |
+|---|---|---|
+| **SSH Connection Pooling** | Backend | Established SSH sessions are held open and reused across polling intervals, eliminating per-cycle TCP and cryptographic handshake cost |
+| **Metric Batching** | Backend | Telemetry updates are batched before Socket.io emission, reducing client message processing overhead |
+| **React Memoisation** | Frontend | `React.memo`, `useMemo`, and `useCallback` prevent full-tree re-renders on each metric update |
+| **WebSocket Message Batching** | Transport | Socket.io emissions are rate-limited per server room, preventing message flood conditions |
+| **Polling Interval Tuning** | Backend | Per-server polling intervals are configurable, allowing teams to trade metric resolution against SSH load on target hosts |
+| **Efficient Telemetry Parsing** | Backend | Raw `/proc` output is parsed in-process with minimal allocations, avoiding intermediate serialisation overhead |
 
 ---
 
-## Performance Optimizations
+## 9. Future Roadmap
 
-Performance at scale in a real-time monitoring platform means different things than performance in a typical web application. The bottleneck isn't database query time or static asset loading — it's the overhead of maintaining N simultaneous SSH sessions, each polling M metrics at K-second intervals.
+The platform's current capability set covers the core monitoring, access, and orchestration use cases. The following capabilities are on the engineering roadmap for upcoming releases:
 
-Several optimizations proved critical. **SSH connection pooling** reuses established SSH connections rather than opening a new connection for each telemetry poll. Establishing an SSH connection involves a cryptographic handshake that takes measurable time — pooling eliminates this overhead for steady-state operation. **Metric batching** combines multiple SSH commands into a single session execution rather than opening the channel once per command, reducing round-trip overhead dramatically.
+### R-01 — AI-Powered Diagnostics
+Integrate an AI inference layer that analyses metric streams to surface anomalies, identify likely root causes, and suggest remediation steps — directly within the monitoring dashboard.
 
-On the frontend, **virtualized list rendering** for organization node lists means the dashboard renders smoothly even when managing hundreds of server nodes. Only the nodes currently visible in the viewport are mounted as React components; off-screen nodes are represented as empty DOM placeholders. This was implemented using a standard virtualization approach and cut initial render time for large organizations from several seconds to near-instant.
+### R-02 — Alerting System
+Threshold-based and anomaly-driven alerts with configurable notification channels including email, webhook, Slack, and PagerDuty integrations.
 
-WebSocket message batching prevents socket event flooding. Rather than emitting a telemetry event for each individual metric as it's collected, the backend batches all metrics for a given node into a single socket emission. This reduces the number of React state updates triggered per poll cycle from N (one per metric) to 1 (one per node), which is a significant reduction in render pressure.
+### R-03 — Mobile Application
+Native iOS and Android applications providing dashboard access and push notification delivery for critical infrastructure alerts.
 
----
+### R-04 — Predictive Analytics
+Time-series forecasting on CPU, memory, and disk trends to surface capacity exhaustion warnings before thresholds are breached.
 
-## Lessons Learned
-
-Building Neon Sentry taught me things that no tutorial could.
-
-**Agentic AI development is real, and it works.** The combination of Gemini for architecture planning, Claude for implementation, and ChatGPT/DeepSeek for debugging and refinement is genuinely powerful. The key insight is that different models have different strengths, and a workflow that uses each model where it excels is more productive than trying to do everything with one tool. I now think of AI models the way I think of specialized engineering roles — you wouldn't ask your frontend designer to write your database migrations.
-
-**Agent-less architecture is harder than it looks, but worth it.** The SSH-based telemetry approach is significantly more complex to implement than installing an agent on target servers. But the security and operational benefits are substantial. No firewall rule changes, no agent update management, no attack surface expansion on monitored servers. For security-conscious environments, this is not a nice-to-have — it's a requirement.
-
-**Multi-tenant SaaS is not a feature you add later.** The organizational hierarchy, role system, and tenant isolation in Neon Sentry were designed from day one. Retrofitting multi-tenancy into a single-tenant application is extraordinarily difficult. If you're building something that will ever support multiple customers or organizations, model that from the first schema migration.
-
-**Real-time is a system-level problem, not a library problem.** Adding Socket.io to a project doesn't make it real-time. Real-time requires thinking about state management, re-render optimization, connection lifecycle, backpressure handling, and session cleanup at every layer of the stack simultaneously. The debugging skills required for real-time systems are fundamentally different from those for request-response systems.
+### R-05 — Push Notifications
+Real-time push delivery of alert and status events to mobile and desktop clients, ensuring on-call engineers are notified without polling the dashboard.
 
 ---
 
-## Future Improvements
+## 10. Conclusion
 
-Neon Sentry as it stands today is a complete, production-ready platform. But the roadmap is long and genuinely exciting.
+Neon Sentry addresses a real operational problem: infrastructure monitoring and access management tooling is unnecessarily fragmented, and most agent-based solutions introduce more operational complexity than they remove. By building on SSH as the universal primitive for both telemetry collection and interactive access, Neon Sentry delivers a unified platform without requiring any changes to monitored hosts.
 
-A **React Native mobile application** is the first priority — infrastructure monitoring doesn't stop when you step away from your desk, and the NOC monitoring mode translates naturally to a tablet interface. Push notifications for critical threshold breaches would make the mobile version genuinely operational rather than just informational.
+The agentless model provides meaningful advantages: no agent lifecycle management, no version drift across a fleet, and no additional host-level attack surface. Combined with AES-256 credential encryption, JWT authentication, and organisation-scoped data isolation, the platform is designed to meet the security requirements of teams managing production infrastructure.
 
-**AI-powered diagnostics using Gemini** is the feature I'm most excited to build. The vision is a conversational diagnostics interface: you describe a symptom — "response times on node-3 have been spiking for the last hour" — and the system correlates that with the actual telemetry data and surfaces probable causes. Gemini's reasoning capabilities applied to real infrastructure telemetry is a genuinely novel capability that existing monitoring tools don't offer.
+> For DevOps and infrastructure teams, Neon Sentry consolidates server monitoring, Docker management, and SSH access into a single authenticated interface — accessible from any browser, without client software installation or agent deployment on any monitored host.
 
-A **push and SMS alert engine** would make Neon Sentry viable for on-call workflows. Currently, monitoring is passive — the dashboard shows you what's happening when you look at it. Active alerting would push critical threshold violations to on-call engineers via Slack, SMS, or PagerDuty-compatible webhooks.
+The Dockerized deployment model ensures the platform itself is low-maintenance and reproducible. The multi-tenant architecture makes it suitable for managed service providers, internal platform teams, and SaaS operators who need to extend infrastructure visibility to multiple teams without compromising isolation between them.
 
-**Predictive infrastructure analytics** is the longer-term vision: using historical telemetry data to forecast resource exhaustion, identify anomalous patterns before they become outages, and recommend proactive scaling actions. This is the difference between reactive monitoring and proactive infrastructure intelligence.
-
----
-
-## Final Thoughts
-
-Neon Sentry started as a personal frustration with fragmented infrastructure tooling. It became something larger: a case study in what a single developer can build when armed with a clear architectural vision, modern full-stack tooling, and a thoughtful multi-AI development workflow.
-
-The technical decisions — agent-less SSH architecture, standalone PostgreSQL, multi-tenant role hierarchy, real-time WebSocket streaming — were not arbitrary. Each one was the result of genuine engineering reasoning, informed by planning sessions with Gemini, implemented with the assistance of Claude, and refined through debugging cycles with ChatGPT and DeepSeek. The AI tools didn't replace engineering judgment. They amplified it.
-
-What I hope readers take from this story isn't a specific technology recommendation. The stack will evolve. What won't change is the underlying principle: **good software starts with deep problem understanding, patient architecture planning, and the humility to recognize that the first solution is rarely the best one.** The Supabase migration was painful. The infinite loop debugging sessions were exhausting. But every challenge taught something that made the system better.
-
-If you're a system administrator drowning in dashboard tabs, or a developer building the next generation of infrastructure tooling, I hope Neon Sentry is an interesting example of what's possible. The future of DevOps tooling is unified, secure, agent-less, and AI-augmented.
-
-And it can run on a single VPS.
+As the roadmap progresses toward AI-assisted diagnostics and predictive analytics, the platform's telemetry foundation — consistent, structured, real-time metric streams from every registered host — positions it well to support increasingly intelligent observability features without requiring architectural changes to the data collection layer.
 
 ---
+
+*Neon Sentry Engineering · Infrastructure & Platform*

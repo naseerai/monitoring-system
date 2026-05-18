@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Plus, Trash2, Server, Shield, Search,
-  ChevronDown, CheckCircle2, X, Loader2, AlertTriangle, UserCheck,
+  ChevronDown, CheckCircle2, X, Loader2, AlertTriangle, UserCheck, Container,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { Profile, UserRole } from '../lib/api';
@@ -215,27 +215,48 @@ function CreateUserModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [email, setEmail] = useState('');
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [showPw,   setShowPw]   = useState(false);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error,    setError]    = useState<string | null>(null);
+  const [success,  setSuccess]  = useState<string | null>(null);
+
+  // If admin enters a password manually → skip email dispatch
+  const manualPassword = password.trim().length >= 8;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
+
+    if (password.trim().length > 0 && password.trim().length < 8) {
+      setError('Password must be at least 8 characters, or leave blank to auto-generate.');
+      return;
+    }
+
     setCreating(true);
     try {
-      const res = await fetch('/api/users/create', {
+      const body: Record<string, string> = {
+        email,
+        role: creatableRole,
+        created_by: createdById,
+      };
+      if (manualPassword) {
+        body.password  = password.trim();
+        body.skipEmail = 'true';   // tells server: don't send welcome email
+      }
+
+      const res  = await fetch('/api/users/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ email, role: creatableRole, created_by: createdById }),
+        body: JSON.stringify(body),
       });
-      
       const data = await res.json();
-      
+
       if (!res.ok) {
-        // Here we catch the specific error message from the server
-        if (data.message && data.message.includes("already been registered")) {
-          throw new Error("This email is already in use. Please use a different email or find the existing user.");
+        if (data.message?.includes('already been registered')) {
+          throw new Error('This email is already in use. Please use a different one.');
         }
         throw new Error(data.message || 'Failed to create user');
       }
@@ -243,7 +264,6 @@ function CreateUserModal({
       onCreated();
       onClose();
     } catch (err: any) {
-      // This sets the error message to be displayed in the UI
       setError(err.message);
     } finally {
       setCreating(false);
@@ -256,7 +276,9 @@ function CreateUserModal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A1A1A]">
           <div className="flex items-center gap-2">
             <Plus size={16} className="text-neon-lime" />
-            <h2 className="text-sm font-bold text-white">Create {creatableRole.charAt(0).toUpperCase() + creatableRole.slice(1)} Account</h2>
+            <h2 className="text-sm font-bold text-white">
+              Create {creatableRole.charAt(0).toUpperCase() + creatableRole.slice(1)} Account
+            </h2>
           </div>
           <button onClick={onClose} className="text-gray-600 hover:text-white transition-colors p-1">
             <X size={18} />
@@ -264,6 +286,7 @@ function CreateUserModal({
         </div>
 
         <form onSubmit={submit} className="p-6 space-y-4">
+          {/* Email */}
           <div>
             <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">Email</label>
             <input
@@ -272,18 +295,56 @@ function CreateUserModal({
               className="w-full bg-[#0A0A0A] border border-[#2a2a2a] focus:border-neon-lime/50 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition-all placeholder-gray-600"
             />
           </div>
-          {/* Auto-password info */}
-          <div className="flex items-start gap-2.5 bg-[#DFFF00]/5 border border-[#DFFF00]/15 rounded-lg px-3.5 py-3">
-            <span className="text-[#DFFF00] mt-0.5 flex-shrink-0">✉</span>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              A secure temporary password will be <span className="text-[#DFFF00] font-semibold">auto-generated</span> and emailed to this address immediately after the account is created.
+
+          {/* Password */}
+          <div>
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">
+              Password <span className="text-gray-700 normal-case tracking-normal font-normal">(leave blank to auto-generate)</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showPw ? 'text' : 'password'}
+                value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="Min 8 characters…"
+                className="w-full bg-[#0A0A0A] border border-[#2a2a2a] focus:border-neon-lime/50 rounded-lg px-4 py-2.5 text-white text-sm outline-none transition-all placeholder-gray-600 pr-20"
+              />
+              <button
+                type="button" onClick={() => setShowPw(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 hover:text-white transition-colors font-bold uppercase tracking-wider"
+              >
+                {showPw ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </div>
+
+          {/* Info banner — changes based on whether password was entered */}
+          <div className={`flex items-start gap-2.5 rounded-lg px-3.5 py-3 border text-xs ${
+            manualPassword
+              ? 'bg-cyan-500/5 border-cyan-500/15'
+              : 'bg-[#DFFF00]/5 border-[#DFFF00]/15'
+          }`}>
+            <span className={`mt-0.5 flex-shrink-0 ${manualPassword ? 'text-cyan-400' : 'text-[#DFFF00]'}`}>
+              {manualPassword ? '🔑' : '✉'}
+            </span>
+            <p className={`leading-relaxed ${manualPassword ? 'text-cyan-300/80' : 'text-gray-400'}`}>
+              {manualPassword
+                ? <>Password set manually — <span className="font-semibold text-cyan-300">no email</span> will be sent. Share credentials directly.</>
+                : <>A secure password will be <span className="text-[#DFFF00] font-semibold">auto-generated</span> and emailed to the new user.</>
+              }
             </p>
           </div>
+
           {error && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-xs text-red-400">
               <AlertTriangle size={12} /> {error}
             </div>
           )}
+          {success && (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-400">
+              <CheckCircle2 size={12} /> {success}
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="flex-1 border border-[#2a2a2a] text-gray-400 hover:text-white py-2.5 rounded-lg text-sm font-bold transition-colors">
               Cancel
@@ -398,6 +459,7 @@ export default function UserManagementPage() {
   const [users,     setUsers]     = useState<Profile[]>([]);
   const [allNodes,  setAllNodes]  = useState<NodeRecord[]>([]);
   const [assignmentCounts, setAssignmentCounts] = useState<Record<string, number>>({});
+  const [dockerMap, setDockerMap] = useState<Record<string, boolean>>({});  // userId → docker_enabled
   const [search,    setSearch]    = useState('');
   const [loading,   setLoading]   = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -419,6 +481,10 @@ export default function UserManagementPage() {
         const userList = (Array.isArray(data) ? data : []).filter((u: any) => u.id !== me.id);
 
 setUsers(userList);
+// Initialise docker map from fetched user data
+const dm: Record<string, boolean> = {};
+userList.forEach((u: any) => { dm[u.id] = !!u.docker_enabled; });
+setDockerMap(dm);
 
 const counts: Record<string, number> = {};
 
@@ -465,6 +531,26 @@ setAssignmentCounts(counts);
     if (!window.confirm('Delete this user? This cannot be undone.')) return;
     await fetch(`/api/users/${userId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
     setUsers(prev => prev.filter(u => u.id !== userId));
+  };
+
+  const toggleDocker = async (userId: string, current: boolean) => {
+    const next = !current;
+    setDockerMap(prev => ({ ...prev, [userId]: next }));
+    try {
+      const r = await fetch(`/api/users/${userId}/docker-toggle`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ docker_enabled: next }),
+      });
+      if (!r.ok) {
+        // Revert on failure
+        setDockerMap(prev => ({ ...prev, [userId]: current }));
+        const d = await r.json().catch(() => ({}));
+        alert(d.message || 'Failed to update Docker access');
+      }
+    } catch {
+      setDockerMap(prev => ({ ...prev, [userId]: current }));
+    }
   };
 
   const filtered = users.filter(u =>
@@ -544,7 +630,7 @@ setAssignmentCounts(counts);
           </div>
 
           {/* Column headers */}
-          <div className="grid grid-cols-[1fr_1fr_120px_80px_120px] gap-4 px-6 py-3 border-b border-[#111] bg-[#080808]">
+          <div className="grid grid-cols-[1fr_1fr_120px_80px_160px] gap-4 px-6 py-3 border-b border-[#111] bg-[#080808]">
             {['Identity', 'Email', 'Role', 'Nodes', 'Actions'].map(col => (
               <p key={col} className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-600">{col}</p>
             ))}
@@ -573,7 +659,7 @@ setAssignmentCounts(counts);
           ) : filtered.map((user, i) => (
             <div
               key={user.id}
-              className={`grid grid-cols-[1fr_1fr_120px_80px_120px] gap-4 px-6 py-4 items-center border-b border-[#111] last:border-0 transition-colors hover:bg-neon-lime/[0.02] ${
+              className={`grid grid-cols-[1fr_1fr_120px_80px_160px] gap-4 px-6 py-4 items-center border-b border-[#111] last:border-0 transition-colors hover:bg-neon-lime/[0.02] ${
                 i % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.01]'
               }`}
             >
@@ -610,6 +696,20 @@ setAssignmentCounts(counts);
                 >
                   <Server size={11} /> Access
                 </button>
+                {/* Docker toggle */}
+                {isAdmin && (
+                  <button
+                    onClick={() => toggleDocker(user.id, dockerMap[user.id] ?? false)}
+                    title={dockerMap[user.id] ? 'Disable Docker Management' : 'Enable Docker Management'}
+                    className={`p-1.5 rounded-lg border transition-colors ${
+                      dockerMap[user.id]
+                        ? 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20 hover:bg-cyan-500/20'
+                        : 'text-gray-600 bg-transparent border-[#222] hover:border-cyan-500/20 hover:text-cyan-400'
+                    }`}
+                  >
+                    <Container size={12} />
+                  </button>
+                )}
                 <button
                   onClick={() => handleDelete(user.id)}
                   title="Delete user"

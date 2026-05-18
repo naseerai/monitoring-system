@@ -12,7 +12,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import { encryptCredential, decryptCredential, isEncrypted } from './src/utils/crypto.ts';
-import { sendWelcomeEmail, sendTestEmail, testSmtpConnection, SmtpConfig } from './src/utils/mailer.ts';
+import { dispatchEmail, sendTestEmail, testSmtpConnection, SmtpConfig } from './src/utils/mailer.ts';
 
 // --------------------------------------------------
 // Input Sanitization Helpers
@@ -753,6 +753,27 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 
 // --------------------------------------------------
+// Auto-migration: ensure tables/columns exist
+// Runs once at startup — safe to run repeatedly (idempotent).
+// --------------------------------------------------
+void (async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        setting_key TEXT PRIMARY KEY,
+        value       JSONB NOT NULL DEFAULT '{}',
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS docker_enabled BOOLEAN NOT NULL DEFAULT false`);
+    console.log('[DB] Auto-migration complete.');
+  } catch (e: any) {
+    console.warn('[DB] Auto-migration warning:', e.message);
+  }
+})();
+
+
+// --------------------------------------------------
 // Rate Limiter: max 5 req/s per user (or IP) per endpoint
 // --------------------------------------------------
 
@@ -1027,7 +1048,7 @@ app.get('/api/status', (_req, res) => {
 app.get('/api/profile', verifyToken, async (req: AuthedRequest, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, role, created_by, created_at FROM users WHERE id = $1',
+      'SELECT id, email, role, created_by, created_at, docker_enabled FROM users WHERE id = $1',
       [req.userId]
     );
     if (!rows[0]) return res.status(404).json({ message: 'Profile not found' });
@@ -1281,6 +1302,36 @@ app.post('/api/super-admin/settings/smtp/test', verifyToken, requireRole('super_
   }
 });
 
+/**
+ * POST /api/super-admin/settings/smtp/verify
+ * Calls transporter.verify() ONLY — no email sent.
+ * Used by the "Test Connection" button in the Settings UI.
+ */
+app.post('/api/super-admin/settings/smtp/verify', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    let smtpConfig: SmtpConfig | undefined = req.body?.host ? req.body as SmtpConfig : undefined;
+
+    // If password is masked, load the real one from DB
+    if (smtpConfig && smtpConfig.password === '••••••••') {
+      const { rows } = await pool.query("SELECT value FROM system_settings WHERE setting_key = 'smtp'");
+      smtpConfig.password = rows[0]?.value?.password ?? '';
+    }
+
+    if (!smtpConfig) {
+      // Load from DB if no body provided
+      const { rows } = await pool.query("SELECT value FROM system_settings WHERE setting_key = 'smtp'");
+      if (!rows[0]) return res.json({ ok: false, error: 'No SMTP config saved yet' });
+      smtpConfig = rows[0].value as SmtpConfig;
+    }
+
+    const result = await testSmtpConnection(smtpConfig);
+    console.log(`[SMTP-VERIFY] Connection test result: ${result.ok ? 'OK' : result.error}`);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(200).json({ ok: false, error: err.message });
+  }
+});
+
 /** POST /api/super-admin/create-admin — Super Admin creates a new Admin */
 app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'), async (req: AuthedRequest, res) => {
   try {
@@ -1296,13 +1347,12 @@ app.post('/api/super-admin/create-admin', verifyToken, requireRole('super_admin'
     );
     console.log(`[SUPER-ADMIN] Created new admin: ${email} (must_change_password=true)`);
 
-    // Auto-send welcome email with the plain-text password (non-blocking)
+    // Dispatch welcome email (non-blocking — never fails the HTTP response)
     const cleanEmail = email.toLowerCase().trim();
-    void sendWelcomeEmail(
-      pool, cleanEmail, password,
-      `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`,
-      { fullName: cleanEmail.split('@')[0], role: 'admin' }
-    ).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
+    void dispatchEmail(pool, 'welcome_mail', cleanEmail, {
+      name:     cleanEmail.split('@')[0],
+      password: password,
+    }).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
 
     return res.status(201).json(rows[0]);
   } catch (err: any) {
@@ -1585,6 +1635,21 @@ app.post('/api/nodes', verifyToken, requireRole('admin', 'employee', 'super_admi
       }
     })();
 
+    // Notify the admin who added the node
+    void (async () => {
+      try {
+        const { rows: adminRows } = await pool.query(
+          'SELECT email FROM users WHERE id = $1', [req.userId]
+        );
+        const adminEmail = adminRows[0]?.email;
+        if (adminEmail) {
+          await dispatchEmail(pool, 'node_notify_mail', adminEmail, { nodeName: displayName });
+        }
+      } catch (e: any) {
+        console.warn('[MAILER] node_notify_mail non-fatal:', e?.message);
+      }
+    })();
+
     const safe = {
       id: nodeId, displayName: row.display_name, ipAddress: row.ip_address,
       username: row.username, port: row.port, authType: row.auth_type,
@@ -1690,8 +1755,8 @@ app.delete('/api/nodes/:id', verifyToken, requireRole('admin', 'super_admin'), a
 
 app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
-    const { email, role, created_by } = req.body as {
-      email: string; password?: string; role: string; created_by?: string;
+    const { email, role, created_by, skipEmail } = req.body as {
+      email: string; password?: string; role: string; created_by?: string; skipEmail?: string;
     };
 
     // Role-based restriction
@@ -1731,16 +1796,19 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'sup
     if (!newUserRows[0]) return res.status(500).json({ message: 'Failed to create user' });
     console.log(`[CREATE-USER] ✓ ${email} (${role}) — temp password generated server-side`);
 
-    // ── Send welcome email with real login credentials ─────────────────────
+    // ── Dispatch welcome email — only when admin did NOT set a manual password ──
     const cleanEmail = email.toLowerCase().trim();
-    void sendWelcomeEmail(
-      pool, cleanEmail, plainPassword,
-      process.env.APP_URL || `${req.protocol}://${req.hostname}:${process.env.PORT || 3000}`,
-      { fullName: cleanEmail.split('@')[0], role }
-    ).then(r => {
-      if (r.sent) console.log(`[MAILER] ✓ Welcome email → ${cleanEmail}`);
-      else        console.warn(`[MAILER] ✗ Could not email ${cleanEmail}: ${r.error}`);
-    }).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
+    if (skipEmail !== 'true') {
+      void dispatchEmail(pool, 'welcome_mail', cleanEmail, {
+        name:     cleanEmail.split('@')[0],
+        password: plainPassword,
+      }).then(r => {
+        if (r.sent) console.log(`[MAILER] ✓ welcome_mail → ${cleanEmail}`);
+        else        console.warn(`[MAILER] ✗ Could not send welcome_mail to ${cleanEmail}: ${r.error}`);
+      }).catch((e: any) => console.warn('[MAILER] Non-fatal:', e?.message));
+    } else {
+      console.log(`[CREATE-USER] skipEmail=true — no welcome mail sent for ${cleanEmail}`);
+    }
 
     return res.status(201).json(newUserRows[0]);
   } catch (err: any) {
@@ -1748,6 +1816,7 @@ app.post('/api/users/create', verifyToken, requireRole('admin', 'employee', 'sup
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
 });
+
 
 app.delete('/api/users/:id', verifyToken, requireRole('admin', 'employee', 'super_admin'), async (req: AuthedRequest, res) => {
   try {
@@ -1858,6 +1927,265 @@ app.delete('/api/users/:id/assign-node/:nodeId', verifyToken, requireRole('admin
   } catch (err: any) {
     return res.status(500).json({ message: err?.message || 'Server error' });
   }
+});
+
+// --------------------------------------------------
+// Docker-enabled toggle for a user (admin / super_admin)
+// --------------------------------------------------
+
+/** PATCH /api/users/:id/docker-toggle */
+app.patch('/api/users/:id/docker-toggle', verifyToken, requireRole('admin', 'super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { docker_enabled } = req.body as { docker_enabled: boolean };
+    if (typeof docker_enabled !== 'boolean') {
+      return res.status(400).json({ message: 'docker_enabled (boolean) is required' });
+    }
+    const { rows } = await pool.query(
+      'UPDATE users SET docker_enabled = $1 WHERE id = $2 RETURNING id, email, docker_enabled',
+      [docker_enabled, id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'User not found' });
+    console.log(`[DOCKER] docker_enabled=${docker_enabled} set for user ${rows[0].email}`);
+    return res.json(rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err?.message || 'Server error' });
+  }
+});
+
+// --------------------------------------------------
+// Docker Full Data — GET /api/nodes/:id/docker-full
+// Permission: user must have docker_enabled = true
+// --------------------------------------------------
+
+/** Safe container ID: hex 64 chars max (short or full SHA) */
+const DOCKER_ID_RE = /^[a-f0-9A-F_][a-zA-Z0-9_\-\.]{0,127}$/;
+function assertDockerSafeId(value: string, field = 'containerId') {
+  if (!DOCKER_ID_RE.test(value)) {
+    throw new Error(`Invalid ${field}: only alphanumeric, hyphen, dot, and underscore allowed.`);
+  }
+}
+
+/** Load a node row and decrypt its credential — shared by docker routes */
+async function loadNodeForDocker(nodeId: string): Promise<NodeRecord> {
+  const { rows } = await pool.query('SELECT * FROM nodes WHERE id = $1', [nodeId]);
+  if (!rows[0]) throw new Error('Node not found');
+  const r = rows[0];
+  return {
+    id: r.id, displayName: r.display_name, ipAddress: r.ip_address,
+    username: r.username, port: r.port ?? 22, authType: r.auth_type,
+    credential: (() => { try { return decryptCredential(r.credential); } catch { return r.credential; } })(),
+    region: r.region, status: r.status,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+/** Check docker access: admin/super_admin bypass; others need docker_enabled = true */
+async function requireDockerEnabled(req: AuthedRequest, res: express.Response): Promise<boolean> {
+  // Admins and super admins always have full Docker access
+  if (req.userRole === 'admin' || req.userRole === 'super_admin') return true;
+  // For employee/intern: check the docker_enabled flag
+  const { rows } = await pool.query('SELECT docker_enabled FROM users WHERE id = $1', [req.userId]);
+  if (!rows[0]?.docker_enabled) {
+    res.status(403).json({ message: 'Docker Management is not enabled for your account. Ask your Admin.' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/nodes/:id/docker-full', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+
+    type JsonLine = Record<string, any>;
+    const parseJsonLines = (raw: string): JsonLine[] => {
+      if (!raw || raw.includes('DOCKER_NOT_FOUND')) return [];
+      return raw.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+        try { return JSON.parse(l); } catch { return null; }
+      }).filter(Boolean) as JsonLine[];
+    };
+
+    try {
+      const [
+        psRaw, imagesRaw, volumesRaw, networksRaw, composeRaw, statsRaw,
+      ] = await Promise.all([
+        sshExec(ssh, `docker ps -a --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+        sshExec(ssh, `docker images --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+        sshExec(ssh, `docker volume ls --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+        sshExec(ssh, `docker network ls --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+        sshExec(ssh, `docker compose ls --format json 2>/dev/null || docker-compose ls --format json 2>/dev/null || echo '[]'`),
+        sshExec(ssh, `docker stats --no-stream --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+      ]);
+
+      // Parse stats into a lookup map by container ID
+      const statsMap: Record<string, JsonLine> = {};
+      parseJsonLines(statsRaw).forEach(s => {
+        if (s.ID || s.BlockIO) statsMap[String(s.ID ?? '').slice(0, 12)] = s;
+      });
+
+      // Merge stats into containers
+      const containers = parseJsonLines(psRaw).map(c => ({
+        ...c,
+        stats: statsMap[String(c.ID ?? '').slice(0, 12)] ?? null,
+      }));
+
+      let stacks: JsonLine[] = [];
+      try {
+        const raw = composeRaw.trim();
+        if (raw.startsWith('[') || raw.startsWith('{')) {
+          stacks = JSON.parse(raw.startsWith('[') ? raw : `[${raw}]`);
+        }
+      } catch { stacks = []; }
+
+      return res.json({
+        nodeId: node.id,
+        nodeName: node.displayName,
+        containers,
+        images: parseJsonLines(imagesRaw),
+        volumes: parseJsonLines(volumesRaw),
+        networks: parseJsonLines(networksRaw),
+        stacks,
+      });
+    } finally {
+      try { if (ssh.isConnected()) ssh.dispose(); } catch {}
+    }
+  } catch (err: any) {
+    console.error('[DOCKER-FULL]', err.message);
+    return res.status(500).json({ message: err.message || 'Docker data fetch failed' });
+  }
+});
+
+// --------------------------------------------------
+// Docker Container Actions  POST /api/nodes/:id/docker/container-action
+// Body: { action: 'start'|'stop'|'restart'|'remove'|'logs', containerId: string }
+// --------------------------------------------------
+
+app.post('/api/nodes/:id/docker/container-action', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+
+    const { action, containerId } = req.body as { action: string; containerId: string };
+
+    const ALLOWED_ACTIONS = ['start', 'stop', 'restart', 'remove', 'logs'] as const;
+    if (!ALLOWED_ACTIONS.includes(action as any)) {
+      return res.status(400).json({ message: `action must be one of: ${ALLOWED_ACTIONS.join(', ')}` });
+    }
+    if (!containerId) return res.status(400).json({ message: 'containerId is required' });
+    assertDockerSafeId(containerId, 'containerId');
+
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+
+    try {
+      let cmd: string;
+      if (action === 'remove') {
+        cmd = `docker rm -f ${containerId}`;
+      } else if (action === 'logs') {
+        cmd = `docker logs --tail=200 ${containerId} 2>&1`;
+      } else {
+        cmd = `docker ${action} ${containerId}`;
+      }
+
+      const output = await sshExec(ssh, cmd);
+      console.log(`[DOCKER-ACTION] ${action} ${containerId} on ${node.displayName}`);
+      return res.json({ success: true, action, containerId, output });
+    } finally {
+      try { if (ssh.isConnected()) ssh.dispose(); } catch {}
+    }
+  } catch (err: any) {
+    console.error('[DOCKER-ACTION]', err.message);
+    return res.status(500).json({ message: err.message || 'Docker action failed' });
+  }
+});
+
+// --------------------------------------------------
+// Docker Prune  POST /api/nodes/:id/docker/prune
+// Body: { target: 'images'|'volumes'|'system' }
+// --------------------------------------------------
+
+app.post('/api/nodes/:id/docker/prune', verifyToken, requireRole('admin', 'super_admin'), async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+
+    const { target } = req.body as { target: string };
+    const ALLOWED = ['images', 'volumes', 'system'] as const;
+    if (!ALLOWED.includes(target as any)) {
+      return res.status(400).json({ message: `target must be one of: ${ALLOWED.join(', ')}` });
+    }
+
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+    try {
+      const cmd = target === 'system'
+        ? 'docker system prune -af --volumes'
+        : `docker ${target} prune -f`;
+      const output = await sshExec(ssh, cmd);
+      console.log(`[DOCKER-PRUNE] ${target} on ${node.displayName}`);
+      return res.json({ success: true, target, output });
+    } finally {
+      try { if (ssh.isConnected()) ssh.dispose(); } catch {}
+    }
+  } catch (err: any) {
+    console.error('[DOCKER-PRUNE]', err.message);
+    return res.status(500).json({ message: err.message || 'Docker prune failed' });
+  }
+});
+
+// --------------------------------------------------
+// Docker Deep Inspection endpoints
+// --------------------------------------------------
+
+
+/** GET /api/nodes/:id/docker/containers/:cid/logs  — last 200 lines */
+app.get('/api/nodes/:id/docker/containers/:cid/logs', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+    assertDockerSafeId(req.params.cid, 'containerId');
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+    try {
+      const out = await sshExec(ssh, `docker logs --tail=200 --timestamps ${req.params.cid} 2>&1`);
+      return res.json({ ok: true, output: out });
+    } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
+  } catch (err: any) { return res.status(500).json({ message: err.message }); }
+});
+
+/** GET /api/nodes/:id/docker/containers/:cid/inspect */
+app.get('/api/nodes/:id/docker/containers/:cid/inspect', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+    assertDockerSafeId(req.params.cid, 'containerId');
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+    try {
+      const out = await sshExec(ssh, `docker inspect ${req.params.cid} 2>&1`);
+      let parsed: any = out;
+      try { parsed = JSON.parse(out); } catch {}
+      return res.json({ ok: true, output: parsed });
+    } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
+  } catch (err: any) { return res.status(500).json({ message: err.message }); }
+});
+
+/** GET /api/nodes/:id/docker/containers/:cid/files?path=/ */
+app.get('/api/nodes/:id/docker/containers/:cid/files', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+    assertDockerSafeId(req.params.cid, 'containerId');
+    const browsePath = (req.query.path as string) || '/';
+    // Strictly allow only safe path characters
+    if (!/^[a-zA-Z0-9/_.\-]+$/.test(browsePath)) {
+      return res.status(400).json({ message: 'Invalid path' });
+    }
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+    try {
+      const out = await sshExec(ssh, `docker exec ${req.params.cid} ls -pla "${browsePath}" 2>&1`);
+      return res.json({ ok: true, path: browsePath, output: out });
+    } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
+  } catch (err: any) { return res.status(500).json({ message: err.message }); }
 });
 
 // --------------------------------------------------

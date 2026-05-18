@@ -8,6 +8,7 @@ export interface Profile {
   role: UserRole;
   created_by: string | null;
   created_at: string;
+  docker_enabled?: boolean;
 }
 
 // ── JWT helpers ──────────────────────────────────────────────────────────────
