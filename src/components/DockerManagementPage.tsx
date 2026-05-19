@@ -1,435 +1,392 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Container, Image, HardDrive, Network, Layers, Play, Square,
-  RotateCcw, Trash2, ScrollText, RefreshCw, Loader2, AlertTriangle,
-  ChevronDown, X, Scissors, Server,
-} from 'lucide-react';
+import { Boxes, Play, Square, RotateCcw, Trash2, RefreshCw, Loader2,
+  AlertTriangle, ChevronDown, Server, Layers, ExternalLink, PackageX,
+  HardDrive, Network, ScrollText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import ContainerDrawer from './ContainerDrawer';
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface DC { ID: string; Names: string; Image: string; Status: string; Ports: string; Label?: string; stats?: { CPUPerc: string; MemUsage: string } | null; }
+interface DImg { ID: string; Repository: string; Tag: string; Size: string; CreatedSince: string; }
+interface DVol { Name: string; Driver: string; Mountpoint?: string; }
+interface DNet { ID: string; Name: string; Driver: string; Scope: string; }
+interface DockerData { dockerNotFound?: boolean; containers: DC[]; images: DImg[]; volumes: DVol[]; networks: DNet[]; }
+interface NR { id: string; displayName: string; ipAddress: string; status: string; }
+type Tab = 'containers' | 'images' | 'volumes' | 'networks';
 
-interface DockerContainer { ID: string; Names: string; Image: string; Status: string; Ports: string; stats?: { CPUPerc: string; MemUsage: string } | null; }
-interface DockerImage     { ID: string; Repository: string; Tag: string; Size: string; CreatedSince: string; }
-interface DockerVolume    { Name: string; Driver: string; Mountpoint?: string; }
-interface DockerNetwork   { ID: string; Name: string; Driver: string; Scope: string; }
-interface DockerStack     { Name: string; Status: string; ConfigFiles?: string; }
-interface DockerFullData  { nodeId: string; nodeName: string; containers: DockerContainer[]; images: DockerImage[]; volumes: DockerVolume[]; networks: DockerNetwork[]; stacks: DockerStack[]; }
-interface NodeRecord      { id: string; displayName: string; ipAddress: string; status: string; }
-
-type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'stacks';
-type ActionType = 'start' | 'stop' | 'restart' | 'remove' | 'logs';
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
-  const s = (status ?? '').toLowerCase();
-  const running = s.startsWith('up');
-  const exited  = s.startsWith('exit') || s === 'exited';
-  const created = s === 'created';
-  let cls = 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-  if (running) cls = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-  else if (exited) cls = 'bg-red-500/20 text-red-400 border-red-500/30';
-  else if (created) cls = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-  const dot = running ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : exited ? 'bg-red-400' : 'bg-gray-400';
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function Dot({ status }: { status: string }) {
+  const up = status.toLowerCase().startsWith('up');
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded border ${cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+    <span className="relative flex items-center justify-center w-3 h-3 flex-shrink-0">
+      {up && <span className="absolute w-3 h-3 rounded-full bg-emerald-400/30 animate-ping" />}
+      <span className={`relative w-2 h-2 rounded-full ${up ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-red-500/60'}`} />
+    </span>
+  );
+}
+
+function Badge({ status }: { status: string }) {
+  const up = status.toLowerCase().startsWith('up');
+  return (
+    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${up ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' : 'text-red-400 bg-red-500/10 border-red-500/20'}`}>
       {status.length > 20 ? status.slice(0, 18) + '…' : status}
     </span>
   );
 }
 
-function TabBtn({ icon: Icon, label, active, onClick }: { icon: React.ElementType; label: string; active: boolean; onClick: () => void }) {
+function ActBtn({ icon: I, title: t, color, busy, onClick }: { icon: React.ElementType; title: string; color: string; busy: boolean; onClick: () => void }) {
+  const c: Record<string, string> = {
+    green: 'text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/10',
+    yellow: 'text-yellow-400 border-yellow-500/20 hover:bg-yellow-500/10',
+    cyan: 'text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/10',
+    purple: 'text-purple-400 border-purple-500/20 hover:bg-purple-500/10',
+    red: 'text-red-400 border-red-500/20 hover:bg-red-500/10',
+  };
   return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
-        active ? 'border-[#DFFF00] text-[#DFFF00]' : 'border-transparent text-gray-500 hover:text-white hover:border-gray-600'
-      }`}
-    >
-      <Icon size={14} />
-      {label}
+    <button onClick={onClick} disabled={busy} title={t} className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 ${c[color]}`}>
+      {busy ? <Loader2 size={11} className="animate-spin" /> : <I size={11} />}
     </button>
   );
 }
 
-const TH = ({ children }: { children: React.ReactNode }) => (
-  <th className="text-left text-[10px] font-bold uppercase tracking-[0.15em] text-gray-600 px-4 py-3">{children}</th>
-);
-const TD = ({ children, mono }: { children: React.ReactNode; mono?: boolean }) => (
-  <td className={`px-4 py-3 text-sm text-gray-300 ${mono ? 'font-mono text-xs' : ''}`}>{children}</td>
-);
+// ── Container Row ─────────────────────────────────────────────────────────────
+function CRow({ c, nodeId, tok, onOpen, onRefresh }: { key?: string; c: DC; nodeId: string; tok: string; onOpen: () => void; onRefresh: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const H = { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' };
+  const up = c.Status.toLowerCase().startsWith('up');
 
-// ── Log Viewer Modal ───────────────────────────────────────────────────────
+  const act = async (action: string) => {
+    setBusy(action);
+    try {
+      const r = await fetch(`/api/nodes/${nodeId}/docker/container-action`, {
+        method: 'POST', headers: H, body: JSON.stringify({ action, containerId: c.ID }),
+      });
+      const d = await r.json();
+      if (!r.ok) alert(d.message || 'Failed');
+      else onRefresh();
+    } catch (e: any) { alert(e.message); }
+    setBusy(null);
+  };
 
-function LogModal({ logs, containerId, onClose }: { logs: string; containerId: string; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-4xl bg-[#0a0a0a] border border-[#2a2a2a] rounded-2xl overflow-hidden flex flex-col" style={{ maxHeight: '80vh' }}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">
-          <div className="flex items-center gap-2">
-            <ScrollText size={15} className="text-[#DFFF00]" />
-            <p className="text-sm font-bold text-white">Container Logs</p>
-            <span className="font-mono text-xs text-gray-500">{containerId.slice(0, 12)}</span>
-          </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors"><X size={16} /></button>
-        </div>
-        <pre className="flex-1 overflow-auto p-5 text-xs font-mono text-green-400 bg-[#050505] leading-relaxed whitespace-pre-wrap">
-          {logs || 'No logs available.'}
-        </pre>
+    <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors border-b border-[#080808] last:border-0 cursor-pointer group" onClick={onOpen}>
+      <Dot status={c.Status} />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-semibold text-white truncate group-hover:text-[#DFFF00] transition-colors">{c.Names.replace(/^\//, '')}</p>
+        <p className="text-[10px] text-gray-600 font-mono">{c.ID.slice(0, 12)} · {c.Image}</p>
+      </div>
+      <Badge status={c.Status} />
+      <div className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
+        {up
+          ? <><ActBtn icon={Square} title="Stop" color="yellow" busy={busy === 'stop'} onClick={() => act('stop')} />
+              <ActBtn icon={RotateCcw} title="Restart" color="cyan" busy={busy === 'restart'} onClick={() => act('restart')} /></>
+          : <ActBtn icon={Play} title="Start" color="green" busy={busy === 'start'} onClick={() => act('start')} />
+        }
+        <ActBtn icon={ScrollText} title="Logs" color="purple" busy={false} onClick={() => onOpen()} />
+        <ActBtn icon={Trash2} title="Remove" color="red" busy={busy === 'remove'} onClick={() => { if (window.confirm('Remove?')) act('remove'); }} />
       </div>
     </div>
   );
 }
 
-// ── Main Page ──────────────────────────────────────────────────────────────
+// ── Stack Group ───────────────────────────────────────────────────────────────
+function StackGroup({ name, containers, nodeId, tok, onOpen, onRefresh }: {
+  key?: string; name: string; containers: DC[]; nodeId: string; tok: string;
+  onOpen: (c: DC) => void; onRefresh: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const running = containers.filter(c => c.Status.toLowerCase().startsWith('up')).length;
+  const isCompose = name !== 'Standalone';
+  const dotColor = running === containers.length ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : running > 0 ? 'bg-yellow-400' : 'bg-red-500/60';
+  return (
+    <div className="border border-[#1a1a1a] rounded-xl overflow-hidden mb-3 bg-[#0a0a0a]">
+      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.02] transition-colors text-left">
+        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
+        {isCompose ? <Layers size={13} className="text-pink-400 flex-shrink-0" /> : <Server size={13} className="text-gray-600 flex-shrink-0" />}
+        {/* name is now always human-readable: either a compose project name or 'Standalone' */}
+        <p className="text-sm font-bold text-white flex-1 truncate">{name}</p>
 
+        <span className="text-[10px] text-gray-600 font-mono">{running}/{containers.length}</span>
+        <ChevronDown size={13} className={`text-gray-600 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div>{containers.map(c => <CRow key={c.ID} c={c} nodeId={nodeId} tok={tok} onOpen={() => onOpen(c)} onRefresh={onRefresh} />)}</div>}
+    </div>
+  );
+}
+
+// ── No Docker ─────────────────────────────────────────────────────────────────
+function NoDocker() {
+  return (
+    <div className="flex flex-col items-center justify-center py-24 gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+        <PackageX size={28} className="text-red-400" />
+      </div>
+      <div className="text-center">
+        <p className="text-white font-bold text-lg mb-1">Docker Engine Not Found</p>
+        <p className="text-gray-500 text-sm">This node doesn't appear to have Docker installed.</p>
+      </div>
+      <a href="https://docs.docker.com/engine/install/" target="_blank" rel="noreferrer"
+        className="flex items-center gap-2 bg-[#DFFF00]/10 border border-[#DFFF00]/20 text-[#DFFF00] font-bold rounded-xl px-5 py-2.5 text-sm hover:bg-[#DFFF00]/20 transition-colors">
+        <ExternalLink size={13} /> How to Install Docker
+      </a>
+    </div>
+  );
+}
+
+// ── TH / TD ───────────────────────────────────────────────────────────────────
+const TH = ({ v }: { v: string }) => <th className="text-left text-[10px] font-bold uppercase tracking-[0.15em] text-gray-600 px-4 py-3">{v}</th>;
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function DockerManagementPage() {
   const { session } = useAuth();
   const tok = session?.access_token ?? '';
-  const H   = { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' };
+  const H   = { Authorization: `Bearer ${tok}` };
 
-  const [nodes,        setNodes]        = useState<NodeRecord[]>([]);
-  const [selectedNode, setSelectedNode] = useState<string>('');
-  const [data,         setData]         = useState<DockerFullData | null>(null);
-  const [tab,          setTab]          = useState<Tab>('containers');
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // containerId being acted on
-  const [logModal,     setLogModal]     = useState<{ id: string; text: string } | null>(null);
-  const [nodeOpen,     setNodeOpen]     = useState(false);
+  const [nodes,    setNodes]    = useState<NR[]>([]);
+  const [selNode,  setSelNode]  = useState('');
+  const [data,     setData]     = useState<DockerData | null>(null);
+  // rawContainers = direct copy from API, never filtered — used for counters & debugging
+  const [rawContainers, setRawContainers] = useState<DC[]>([]);
+  const [tab,      setTab]      = useState<Tab>('containers');
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+  const [noDocker, setNoDocker] = useState(false);
+  const [nodeOpen, setNodeOpen] = useState(false);
+  const [drawer,   setDrawer]   = useState<DC | null>(null);
 
-  // Load assigned nodes for selector
   useEffect(() => {
-    fetch('/api/nodes', { headers: H })
-      .then(r => r.ok ? r.json() : [])
+    fetch('/api/nodes', { headers: H }).then(r => r.ok ? r.json() : [])
       .then((rows: any[]) => {
         const mapped = rows.map(n => ({ id: n.id, displayName: n.displayName ?? n.display_name, ipAddress: n.ipAddress ?? n.ip_address, status: n.status }));
         setNodes(mapped);
-        if (mapped.length > 0) setSelectedNode(mapped[0].id);
-      })
-      .catch(() => {});
+        if (mapped.length) setSelNode(mapped[0].id);
+      }).catch(() => {});
   }, [tok]);
 
   const fetchDocker = useCallback(async () => {
-    if (!selectedNode) return;
-    setLoading(true);
-    setError(null);
+    if (!selNode) return;
+    setLoading(true); setError(null); setNoDocker(false);
     try {
-      const r = await fetch(`/api/nodes/${selectedNode}/docker-full`, { headers: H });
+      const r = await fetch(`/api/nodes/${selNode}/docker-full`, { headers: H });
+      // Guard: if server returned HTML (proxy error), show a clear message
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        throw new Error(`Server returned non-JSON (status ${r.status}) — is the backend running?`);
+      }
       const d = await r.json();
       if (!r.ok) throw new Error(d.message || `HTTP ${r.status}`);
-      setData(d);
+      if (d.dockerNotFound) {
+        setNoDocker(true); setData(null); setRawContainers([]);
+      } else {
+        // Set raw containers FIRST before any processing
+        const cs: DC[] = Array.isArray(d.containers) ? d.containers : [];
+        setRawContainers(cs);
+        console.log('[DOCKER UI] Received', cs.length, 'containers from API');
+        setData(d);
+      }
     } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedNode, tok]);
+      if (/not found|docker/i.test(e.message)) setNoDocker(true);
+      else setError(e.message);
+    } finally { setLoading(false); }
+  }, [selNode, tok]);
 
   useEffect(() => { fetchDocker(); }, [fetchDocker]);
 
-  // Container action
-  const containerAction = async (action: ActionType, containerId: string) => {
-    setActionLoading(containerId + action);
-    try {
-      const r = await fetch(`/api/nodes/${selectedNode}/docker/container-action`, {
-        method: 'POST', headers: H,
-        body: JSON.stringify({ action, containerId }),
-      });
-      const d = await r.json();
-      if (!r.ok) { alert(d.message || 'Action failed'); return; }
-      if (action === 'logs') {
-        setLogModal({ id: containerId, text: d.output ?? '' });
-      } else {
-        await fetchDocker();
-      }
-    } catch (e: any) { alert(e.message); }
-    finally { setActionLoading(null); }
-  };
+  const groups = React.useMemo((): Record<string, DC[]> => {
+    if (!data) return { Standalone: [] };
+    // Pre-initialize Standalone bucket — always present
+    const g: Record<string, DC[]> = { Standalone: [] };
+    for (const c of data.containers) {
+      // Backend sets Label='Standalone' for non-compose containers, or a project name
+      const key = c.Label && c.Label.trim() && c.Label !== 'Standalone'
+        ? c.Label.trim()
+        : 'Standalone';
+      if (!g[key]) g[key] = [];
+      g[key].push(c);
+    }
+    return g;
+  }, [data]);
 
-  // Prune
-  const prune = async (target: 'images' | 'volumes' | 'system') => {
-    if (!window.confirm(`Prune ${target}? This cannot be undone.`)) return;
-    try {
-      const r = await fetch(`/api/nodes/${selectedNode}/docker/prune`, {
-        method: 'POST', headers: H, body: JSON.stringify({ target }),
-      });
-      const d = await r.json();
-      alert(d.success ? `Pruned ${target}:\n${d.output?.slice(0, 400)}` : d.message);
-      fetchDocker();
-    } catch (e: any) { alert(e.message); }
-  };
+  // Derived counters — always reflect raw API data, never grouped/filtered view
+  const totalContainers   = rawContainers.length;
+  const runningContainers = rawContainers.filter(c => c.Status?.toLowerCase().startsWith('up')).length;
 
-  const selectedNodeName = nodes.find(n => n.id === selectedNode)?.displayName ?? 'Select a node';
+  const selName = nodes.find(n => n.id === selNode)?.displayName ?? 'Select node';
 
-  const btn = (action: ActionType, id: string, label: string, Icon: React.ElementType, cls: string) => {
-    const busy = actionLoading === id + action;
-    return (
-      <button
-        key={action}
-        onClick={() => containerAction(action, id)}
-        disabled={!!actionLoading}
-        title={label}
-        className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 ${cls}`}
-      >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
-      </button>
-    );
-  };
+  const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+    { id: 'containers', label: 'Containers', icon: Boxes },
+    { id: 'images',     label: 'Images',     icon: Boxes },
+    { id: 'volumes',    label: 'Volumes',    icon: HardDrive },
+    { id: 'networks',   label: 'Networks',   icon: Network },
+  ];
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#050505]">
-      <div className="p-6 md:p-8 space-y-6 max-w-7xl">
+      <div className="p-6 md:p-8 space-y-5 max-w-6xl">
 
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#DFFF00]/10 border border-[#DFFF00]/20 flex items-center justify-center">
-              <Container size={18} className="text-[#DFFF00]" />
+              <Boxes size={18} className="text-[#DFFF00]" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-white tracking-tight">Docker Management</h1>
-              <p className="text-xs text-gray-500 mt-0.5">Manage containers, images, volumes and stacks via SSH</p>
+              <p className="text-xs text-gray-500 mt-0.5">Inspect and control containers via SSH</p>
             </div>
           </div>
-
-          {/* Node selector */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div className="relative">
-              <button
-                onClick={() => setNodeOpen(v => !v)}
-                className="flex items-center gap-2 bg-[#111] border border-[#2a2a2a] hover:border-[#DFFF00]/30 text-white rounded-xl px-4 py-2.5 text-sm font-medium transition-colors min-w-[200px] justify-between"
-              >
-                <span className="flex items-center gap-2">
-                  <Server size={13} className="text-[#DFFF00]" />
-                  {selectedNodeName}
-                </span>
+              <button onClick={() => setNodeOpen(v => !v)}
+                className="flex items-center gap-2 bg-[#111] border border-[#2a2a2a] hover:border-[#DFFF00]/30 text-white rounded-xl px-4 py-2.5 text-sm font-medium min-w-[190px] justify-between transition-colors">
+                <span className="flex items-center gap-2"><Server size={13} className="text-[#DFFF00]" />{selName}</span>
                 <ChevronDown size={13} className="text-gray-500" />
               </button>
               {nodeOpen && (
                 <div className="absolute right-0 top-full mt-1 w-64 bg-[#111] border border-[#2a2a2a] rounded-xl shadow-2xl z-20 overflow-hidden">
-                  {nodes.length === 0
-                    ? <p className="px-4 py-3 text-sm text-gray-500">No nodes available</p>
-                    : nodes.map(n => (
-                      <button
-                        key={n.id}
-                        onClick={() => { setSelectedNode(n.id); setNodeOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-white/5 transition-colors ${selectedNode === n.id ? 'text-[#DFFF00]' : 'text-gray-300'}`}
-                      >
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${n.status === 'online' ? 'bg-emerald-400' : 'bg-red-500'}`} />
-                        {n.displayName}
-                        <span className="text-[10px] text-gray-600 font-mono ml-auto">{n.ipAddress}</span>
-                      </button>
-                    ))
-                  }
+                  {nodes.map(n => (
+                    <button key={n.id} onClick={() => { setSelNode(n.id); setNodeOpen(false); }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-white/5 transition-colors ${selNode === n.id ? 'text-[#DFFF00]' : 'text-gray-300'}`}>
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${n.status === 'online' ? 'bg-emerald-400' : 'bg-red-500'}`} />
+                      {n.displayName}
+                      <span className="text-[10px] text-gray-600 font-mono ml-auto">{n.ipAddress}</span>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-            <button
-              onClick={fetchDocker}
-              disabled={loading}
-              className="p-2.5 bg-[#111] border border-[#2a2a2a] hover:border-[#DFFF00]/30 text-gray-400 hover:text-white rounded-xl transition-colors disabled:opacity-50"
-              title="Refresh"
-            >
+            <button onClick={fetchDocker} disabled={loading}
+              className="p-2.5 bg-[#111] border border-[#2a2a2a] hover:border-[#DFFF00]/30 text-gray-400 hover:text-[#DFFF00] rounded-xl transition-colors disabled:opacity-50">
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
           </div>
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-sm text-red-400">
-            <AlertTriangle size={15} /> {error}
-          </div>
-        )}
+        {error && <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-sm text-red-400"><AlertTriangle size={15} />{error}</div>}
 
-        {/* Stats strip */}
-        {data && (
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            {[
-              { label: 'Containers', value: data.containers.length, icon: Container, color: 'text-[#DFFF00]' },
-              { label: 'Images',     value: data.images.length,     icon: Image,     color: 'text-purple-400' },
-              { label: 'Volumes',    value: data.volumes.length,     icon: HardDrive, color: 'text-cyan-400' },
-              { label: 'Networks',   value: data.networks.length,    icon: Network,   color: 'text-orange-400' },
-              { label: 'Stacks',     value: data.stacks.length,      icon: Layers,    color: 'text-pink-400' },
-            ].map(({ label, value, icon: Icon, color }) => (
-              <div key={label} className="bg-[#0d0d0d] border border-[#1a1a1a] rounded-xl p-4 hover:border-[#2a2a2a] transition-colors">
-                <div className="flex items-center gap-2 mb-2">
-                  <Icon size={13} className={color} />
-                  <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">{label}</p>
+        {loading && <div className="flex items-center justify-center py-20 gap-3 text-gray-600"><Loader2 size={18} className="animate-spin" /><span className="text-sm">Fetching Docker data…</span></div>}
+
+        {!loading && noDocker && <NoDocker />}
+
+        {!loading && !noDocker && data && (
+          <>
+            {/* Stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { l: 'Containers', v: totalContainers, sub: `${runningContainers} running`, c: 'text-[#DFFF00]' },
+                { l: 'Images',     v: data.images.length,   sub: '',                      c: 'text-purple-400' },
+                { l: 'Volumes',    v: data.volumes.length,  sub: '',                      c: 'text-cyan-400' },
+                { l: 'Networks',   v: data.networks.length, sub: '',                      c: 'text-orange-400' },
+              ].map(({ l, v, sub, c }) => (
+                <div key={l} className="bg-[#0d0d0d] border border-[#1a1a1a] rounded-xl p-4">
+                  <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest mb-1.5">{l}</p>
+                  <p className={`text-3xl font-bold ${c}`}>{v}</p>
+                  {sub && <p className="text-[10px] text-gray-500 mt-1">{sub}</p>}
                 </div>
-                <p className={`text-3xl font-bold ${color}`}>{value}</p>
+              ))}
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-0 border-b border-[#1a1a1a]">
+              {TABS.map(({ id, label }) => (
+                <button key={id} onClick={() => setTab(id)}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all capitalize ${tab === id ? 'border-[#DFFF00] text-[#DFFF00]' : 'border-transparent text-gray-500 hover:text-white'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Containers Accordion */}
+            {tab === 'containers' && (
+              <div>
+                {totalContainers === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
+                    <div className="w-14 h-14 rounded-2xl bg-gray-800/50 border border-gray-700/30 flex items-center justify-center">
+                      <Boxes size={24} className="text-gray-600" />
+                    </div>
+                    <p className="text-gray-500 text-sm font-medium">No containers found on this node</p>
+                    <p className="text-gray-700 text-xs">The node is reachable but <code className="font-mono text-gray-500">docker ps -a</code> returned 0 results.</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Compose stacks first (all groups except Standalone) */}
+                    {(Object.entries(groups) as [string, DC[]][])
+                      .filter(([k, cs]) => k !== 'Standalone' && cs.length > 0)
+                      .map(([name, cs]) => (
+                        <StackGroup key={name} name={name} containers={cs} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
+                      ))}
+                    {/* Standalone — only shown if there are containers in it */}
+                    {groups['Standalone'] && groups['Standalone'].length > 0 && (
+                      <StackGroup name="Standalone" containers={groups['Standalone']} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
+                    )}
+                  </>
+                )}
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded-2xl overflow-hidden">
-          <div className="flex items-center gap-0 border-b border-[#1a1a1a] overflow-x-auto px-4">
-            <TabBtn icon={Container} label="Containers" active={tab === 'containers'} onClick={() => setTab('containers')} />
-            <TabBtn icon={Image}     label="Images"     active={tab === 'images'}     onClick={() => setTab('images')} />
-            <TabBtn icon={HardDrive} label="Volumes"    active={tab === 'volumes'}    onClick={() => setTab('volumes')} />
-            <TabBtn icon={Network}   label="Networks"   active={tab === 'networks'}   onClick={() => setTab('networks')} />
-            <TabBtn icon={Layers}    label="Stacks"     active={tab === 'stacks'}     onClick={() => setTab('stacks')} />
-
-            {/* Prune actions — right side */}
-            {data && (tab === 'images' || tab === 'volumes') && (
-              <button
-                onClick={() => prune(tab === 'images' ? 'images' : 'volumes')}
-                className="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-red-400 border border-transparent hover:border-red-500/20 hover:bg-red-500/5 rounded-lg px-3 py-1.5 transition-colors"
-              >
-                <Scissors size={11} /> Prune {tab === 'images' ? 'Images' : 'Volumes'}
-              </button>
             )}
-          </div>
 
-          {/* Table content */}
-          {loading ? (
-            <div className="flex items-center justify-center py-20 gap-3 text-gray-600">
-              <Loader2 size={18} className="animate-spin" /> <span className="text-sm">Fetching Docker data…</span>
-            </div>
-          ) : !data ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-2 text-gray-700">
-              <Container size={28} />
-              <p className="text-sm">Select a node to load Docker data</p>
-            </div>
-          ) : (
 
-            /* ── CONTAINERS ── */
-            tab === 'containers' ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#080808] border-b border-[#111]">
-                    <tr><TH>Container</TH><TH>Image</TH><TH>Status</TH><TH>Ports</TH><TH>CPU</TH><TH>Memory</TH><TH>Actions</TH></tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#111]">
-                    {data.containers.length === 0 ? (
-                      <tr><td colSpan={7} className="text-center py-12 text-gray-600 text-sm">No containers found</td></tr>
-                    ) : data.containers.map(c => (
-                      <tr key={c.ID} className="hover:bg-white/[0.02] transition-colors">
-                        <TD>
-                          <div>
-                            <p className="text-white font-semibold text-xs">{c.Names}</p>
-                            <p className="text-gray-600 font-mono text-[10px]">{c.ID?.slice(0, 12)}</p>
-                          </div>
-                        </TD>
-                        <TD mono>{c.Image}</TD>
-                        <TD><StatusBadge status={c.Status ?? ''} /></TD>
-                        <TD mono>{c.Ports || '—'}</TD>
-                        <TD mono>{c.stats?.CPUPerc ?? '—'}</TD>
-                        <TD mono>{c.stats?.MemUsage ?? '—'}</TD>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            {btn('start',   c.ID, 'Start',   Play,       'text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/10')}
-                            {btn('stop',    c.ID, 'Stop',    Square,     'text-yellow-400  border-yellow-500/20  hover:bg-yellow-500/10')}
-                            {btn('restart', c.ID, 'Restart', RotateCcw,  'text-cyan-400    border-cyan-500/20    hover:bg-cyan-500/10')}
-                            {btn('logs',    c.ID, 'Logs',    ScrollText, 'text-purple-400  border-purple-500/20  hover:bg-purple-500/10')}
-                            {btn('remove',  c.ID, 'Remove',  Trash2,     'text-red-400     border-red-500/20     hover:bg-red-500/10')}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+            {/* Images */}
+            {tab === 'images' && (
+              <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded-xl overflow-hidden">
+                <table className="w-full"><thead className="bg-[#080808] border-b border-[#111]"><tr><TH v="Repository"/><TH v="Tag"/><TH v="ID"/><TH v="Size"/><TH v="Created"/></tr></thead>
+                  <tbody className="divide-y divide-[#0f0f0f]">
+                    {data.images.length === 0 ? <tr><td colSpan={5} className="text-center py-10 text-gray-600 text-sm">No images</td></tr>
+                      : data.images.map((img, i) => (
+                        <tr key={i} className="hover:bg-white/[0.02]">
+                          <td className="px-4 py-3 text-xs font-mono text-purple-300">{img.Repository}</td>
+                          <td className="px-4 py-3"><span className="text-[10px] bg-purple-500/10 border border-purple-500/20 text-purple-400 px-2 py-0.5 rounded font-mono">{img.Tag}</span></td>
+                          <td className="px-4 py-3 text-xs font-mono text-gray-500">{img.ID?.slice(0, 12)}</td>
+                          <td className="px-4 py-3 text-xs font-mono text-cyan-400">{img.Size}</td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{img.CreatedSince}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
+            )}
 
-            /* ── IMAGES ── */
-            ) : tab === 'images' ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#080808] border-b border-[#111]">
-                    <tr><TH>Repository</TH><TH>Tag</TH><TH>Image ID</TH><TH>Size</TH><TH>Created</TH></tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#111]">
-                    {data.images.length === 0 ? (
-                      <tr><td colSpan={5} className="text-center py-12 text-gray-600 text-sm">No images found</td></tr>
-                    ) : data.images.map((img, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                        <TD><span className="text-purple-300 font-mono text-xs">{img.Repository}</span></TD>
-                        <TD><span className="text-xs bg-purple-500/10 border border-purple-500/20 text-purple-400 px-2 py-0.5 rounded font-mono">{img.Tag}</span></TD>
-                        <TD mono>{img.ID?.slice(0, 12)}</TD>
-                        <TD><span className="text-cyan-400 font-mono text-xs">{img.Size}</span></TD>
-                        <TD><span className="text-gray-500 text-xs">{img.CreatedSince}</span></TD>
-                      </tr>
-                    ))}
+            {/* Volumes */}
+            {tab === 'volumes' && (
+              <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded-xl overflow-hidden">
+                <table className="w-full"><thead className="bg-[#080808] border-b border-[#111]"><tr><TH v="Name"/><TH v="Driver"/><TH v="Mount"/></tr></thead>
+                  <tbody className="divide-y divide-[#0f0f0f]">
+                    {data.volumes.length === 0 ? <tr><td colSpan={3} className="text-center py-10 text-gray-600 text-sm">No volumes</td></tr>
+                      : data.volumes.map((v, i) => (
+                        <tr key={i} className="hover:bg-white/[0.02]">
+                          <td className="px-4 py-3 text-xs font-mono text-cyan-300">{v.Name}</td>
+                          <td className="px-4 py-3 text-xs text-gray-400">{v.Driver}</td>
+                          <td className="px-4 py-3 text-xs font-mono text-gray-600">{v.Mountpoint || '—'}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
+            )}
 
-            /* ── VOLUMES ── */
-            ) : tab === 'volumes' ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#080808] border-b border-[#111]">
-                    <tr><TH>Name</TH><TH>Driver</TH><TH>Mount Point</TH></tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#111]">
-                    {data.volumes.length === 0 ? (
-                      <tr><td colSpan={3} className="text-center py-12 text-gray-600 text-sm">No volumes found</td></tr>
-                    ) : data.volumes.map((v, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                        <TD><span className="text-cyan-300 font-mono text-xs">{v.Name}</span></TD>
-                        <TD><span className="text-xs text-gray-400">{v.Driver}</span></TD>
-                        <TD mono>{v.Mountpoint || '—'}</TD>
-                      </tr>
-                    ))}
+            {/* Networks */}
+            {tab === 'networks' && (
+              <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded-xl overflow-hidden">
+                <table className="w-full"><thead className="bg-[#080808] border-b border-[#111]"><tr><TH v="Name"/><TH v="ID"/><TH v="Driver"/><TH v="Scope"/></tr></thead>
+                  <tbody className="divide-y divide-[#0f0f0f]">
+                    {data.networks.length === 0 ? <tr><td colSpan={4} className="text-center py-10 text-gray-600 text-sm">No networks</td></tr>
+                      : data.networks.map((n, i) => (
+                        <tr key={i} className="hover:bg-white/[0.02]">
+                          <td className="px-4 py-3 text-xs font-semibold text-orange-300">{n.Name}</td>
+                          <td className="px-4 py-3 text-xs font-mono text-gray-500">{n.ID?.slice(0, 12)}</td>
+                          <td className="px-4 py-3 text-xs text-gray-400">{n.Driver}</td>
+                          <td className="px-4 py-3"><span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/10 border border-orange-500/20 text-orange-400 font-bold uppercase">{n.Scope}</span></td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
-
-            /* ── NETWORKS ── */
-            ) : tab === 'networks' ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#080808] border-b border-[#111]">
-                    <tr><TH>Name</TH><TH>Network ID</TH><TH>Driver</TH><TH>Scope</TH></tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#111]">
-                    {data.networks.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center py-12 text-gray-600 text-sm">No networks found</td></tr>
-                    ) : data.networks.map((n, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                        <TD><span className="text-orange-300 font-semibold text-xs">{n.Name}</span></TD>
-                        <TD mono>{n.ID?.slice(0, 12)}</TD>
-                        <TD><span className="text-xs text-gray-400">{n.Driver}</span></TD>
-                        <TD>
-                          <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/10 border border-orange-500/20 text-orange-400 font-bold uppercase tracking-widest">{n.Scope}</span>
-                        </TD>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-            /* ── STACKS ── */
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#080808] border-b border-[#111]">
-                    <tr><TH>Stack Name</TH><TH>Status</TH><TH>Compose File</TH></tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#111]">
-                    {data.stacks.length === 0 ? (
-                      <tr><td colSpan={3} className="text-center py-12 text-gray-600 text-sm">No active Compose stacks found</td></tr>
-                    ) : data.stacks.map((s, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                        <TD><span className="text-pink-300 font-semibold text-xs">{s.Name}</span></TD>
-                        <TD><StatusBadge status={s.Status ?? 'unknown'} /></TD>
-                        <TD mono>{s.ConfigFiles || '—'}</TD>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          )}
-        </div>
+            )}
+          </>
+        )}
       </div>
 
-      {/* Log Modal */}
-      {logModal && <LogModal logs={logModal.text} containerId={logModal.id} onClose={() => setLogModal(null)} />}
+      {/* Container Detail Drawer */}
+      {drawer && <ContainerDrawer container={drawer} nodeId={selNode} tok={tok} onClose={() => setDrawer(null)} />}
     </div>
   );
 }

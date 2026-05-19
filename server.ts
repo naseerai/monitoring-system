@@ -1999,64 +1999,148 @@ app.get('/api/nodes/:id/docker-full', verifyToken, async (req: AuthedRequest, re
 
     const node = await loadNodeForDocker(req.params.id);
     const ssh  = await connectSSH(node);
+    const nodeId = req.params.id;
 
     type JsonLine = Record<string, any>;
+
     const parseJsonLines = (raw: string): JsonLine[] => {
-      if (!raw || raw.includes('DOCKER_NOT_FOUND')) return [];
+      if (!raw) return [];
       return raw.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
         try { return JSON.parse(l); } catch { return null; }
       }).filter(Boolean) as JsonLine[];
     };
 
+    // Parse pipe-delimited lines. Fields: ID||Names||Image||Status||Label||Ports
+    // '||' never appears in docker field values (names, ports, image names)
+    const parsePsLines = (raw: string): JsonLine[] => {
+      if (!raw) return [];
+      const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+
+      console.log(`[DOCKER DEBUG] Raw line count from docker ps: ${lines.length}`);
+      if (lines.length > 0) console.log(`[DOCKER DEBUG] First raw line: ${JSON.stringify(lines[0])}`);
+
+      const results: JsonLine[] = [];
+      for (const line of lines) {
+        const parts = line.split('||');
+        if (parts.length < 4) {
+          console.log(`[DOCKER DEBUG] Skipping short line (${parts.length} parts):`, JSON.stringify(line.slice(0, 120)));
+          continue;
+        }
+        const [rawID = '', rawNames = '', rawImage = '', rawStatus = '', rawLabel = '', rawPorts = ''] = parts;
+        const ID = rawID.trim();
+        if (!ID) continue;
+        results.push({
+          ID,
+          Names:  rawNames.trim(),
+          Image:  rawImage.trim(),
+          Status: rawStatus.trim(),
+          // Explicitly 'Standalone' when label is absent — never undefined
+          Label:  rawLabel.trim() || 'Standalone',
+          Ports:  rawPorts.trim(),
+        });
+      }
+      return results;
+    };
+
+    // Run docker ps with the safest possible quoting.
+    // We use printf to assign the format string to a variable so the shell never
+    // mangles the Go template double-quotes inside {{index .Labels "..."}}.
+    const runDockerPs = async (): Promise<string> => {
+      // FMT is assigned via printf so the remote shell treats it as a literal string
+      const cmd = [
+        `FMT=$(printf '%s' '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}`,
+        // We split label access across concat to avoid any JS/shell interference
+        `||{{index .Labels "com.docker.compose.project"}}||{{.Ports}}')`,
+        `&& docker ps -a --format "$FMT"`,
+      ].join(' ');
+
+      let r = await ssh.execCommand(cmd);
+      let out = (r.stdout || '').trim();
+
+      console.log(`[DOCKER DEBUG] docker ps stdout len=${out.length} stderr=${JSON.stringify((r.stderr || '').slice(0, 300))}`);
+
+      // If still empty, maybe the label accessor isn't supported — fall back to simpler format
+      if (!out) {
+        const simpleCmd = `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Ports}}'`;
+        const r2 = await ssh.execCommand(simpleCmd);
+        out = (r2.stdout || '').trim();
+        console.log(`[DOCKER DEBUG] Simple fallback stdout len=${out.length} stderr=${JSON.stringify((r2.stderr || '').slice(0, 200))}`);
+        // Inject empty label field so parser still gets 5 fields
+        if (out) out = out.split('\n').map(l => `${l}||`).join('\n');
+      }
+
+      // Sudo fallback if docker daemon permission denied
+      if (!out && r.stderr) {
+        const e = r.stderr.toLowerCase();
+        if (e.includes('permission denied') || e.includes('cannot connect') || e.includes('docker.sock')) {
+          console.log('[DOCKER] Retrying with sudo...');
+          const r3 = await ssh.execCommand(`sudo docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||||{{.Ports}}'`);
+          out = (r3.stdout || '').trim();
+          console.log(`[DOCKER DEBUG] sudo stdout len=${out.length}`);
+        }
+      }
+
+      return out;
+    };
+
     try {
-      const [
-        psRaw, imagesRaw, volumesRaw, networksRaw, composeRaw, statsRaw,
-      ] = await Promise.all([
-        sshExec(ssh, `docker ps -a --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
-        sshExec(ssh, `docker images --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
-        sshExec(ssh, `docker volume ls --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
-        sshExec(ssh, `docker network ls --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
-        sshExec(ssh, `docker compose ls --format json 2>/dev/null || docker-compose ls --format json 2>/dev/null || echo '[]'`),
-        sshExec(ssh, `docker stats --no-stream --format '{{json .}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`),
+      const [psRaw, imagesRaw, volumesRaw, networksRaw, statsRaw] = await Promise.all([
+        runDockerPs().catch(() => ''),
+        ssh.execCommand(`docker images --format '{{json .}}'`).then(r => r.stdout || '').catch(() => ''),
+        ssh.execCommand(`docker volume ls --format '{{json .}}'`).then(r => r.stdout || '').catch(() => ''),
+        ssh.execCommand(`docker network ls --format '{{json .}}'`).then(r => r.stdout || '').catch(() => ''),
+        ssh.execCommand(`docker stats --no-stream --format '{{json .}}'`).then(r => r.stdout || '').catch(() => ''),
       ]);
 
-      // Parse stats into a lookup map by container ID
-      const statsMap: Record<string, JsonLine> = {};
-      parseJsonLines(statsRaw).forEach(s => {
-        if (s.ID || s.BlockIO) statsMap[String(s.ID ?? '').slice(0, 12)] = s;
-      });
+      // Detect docker not installed: test if docker binary exists at all
+      const dockerMissing = !psRaw && !imagesRaw;
+      if (dockerMissing) {
+        // Double-check: run `which docker` to distinguish "no docker" from "empty results"
+        const which = await ssh.execCommand('which docker || command -v docker').catch(() => ({ stdout: '' }));
+        if (!(which.stdout || '').trim()) {
+          console.log('[DOCKER] Docker not found on node', node.displayName);
+          return res.json({ nodeId: node.id, nodeName: node.displayName, dockerNotFound: true, containers: [], images: [], volumes: [], networks: [] });
+        }
+      }
 
-      // Merge stats into containers
-      const containers = parseJsonLines(psRaw).map(c => ({
+      // Stats lookup map keyed by short 12-char container ID
+      const statsMap: Record<string, JsonLine> = {};
+      parseJsonLines(statsRaw).forEach(s => { if (s.ID) statsMap[String(s.ID).slice(0, 12)] = s; });
+
+      const containers = parsePsLines(psRaw).map(c => ({
         ...c,
-        stats: statsMap[String(c.ID ?? '').slice(0, 12)] ?? null,
+        stats: statsMap[String(c.ID).slice(0, 12)] ?? null,
       }));
 
-      let stacks: JsonLine[] = [];
-      try {
-        const raw = composeRaw.trim();
-        if (raw.startsWith('[') || raw.startsWith('{')) {
-          stacks = JSON.parse(raw.startsWith('[') ? raw : `[${raw}]`);
-        }
-      } catch { stacks = []; }
+      // Key debug log — visible in npm run dev:server terminal
+      console.log(`[DOCKER DEBUG] Found ${containers.length} containers on node`, nodeId);
+      if (containers.length > 0) {
+        console.log('[DOCKER DEBUG] First container:', JSON.stringify(containers[0]));
+      } else {
+        console.log('[DOCKER DEBUG] Raw PS (first 300):', JSON.stringify(psRaw.slice(0, 300)));
+      }
 
       return res.json({
         nodeId: node.id,
         nodeName: node.displayName,
+        dockerNotFound: false,
         containers,
         images: parseJsonLines(imagesRaw),
         volumes: parseJsonLines(volumesRaw),
         networks: parseJsonLines(networksRaw),
-        stacks,
       });
     } finally {
       try { if (ssh.isConnected()) ssh.dispose(); } catch {}
     }
   } catch (err: any) {
+
     console.error('[DOCKER-FULL]', err.message);
     return res.status(500).json({ message: err.message || 'Docker data fetch failed' });
   }
 });
+
+
+
 
 // --------------------------------------------------
 // Docker Container Actions  POST /api/nodes/:id/docker/container-action
@@ -2138,8 +2222,6 @@ app.post('/api/nodes/:id/docker/prune', verifyToken, requireRole('admin', 'super
 // Docker Deep Inspection endpoints
 // --------------------------------------------------
 
-
-/** GET /api/nodes/:id/docker/containers/:cid/logs  — last 200 lines */
 app.get('/api/nodes/:id/docker/containers/:cid/logs', verifyToken, async (req: AuthedRequest, res) => {
   try {
     if (!await requireDockerEnabled(req, res)) return;
@@ -2147,10 +2229,12 @@ app.get('/api/nodes/:id/docker/containers/:cid/logs', verifyToken, async (req: A
     const node = await loadNodeForDocker(req.params.id);
     const ssh  = await connectSSH(node);
     try {
-      const out = await sshExec(ssh, `docker logs --tail=200 --timestamps ${req.params.cid} 2>&1`);
-      return res.json({ ok: true, output: out });
+      // execCommand merges stdout+stderr and never throws on non-zero exit
+      const result = await ssh.execCommand(`docker logs --tail=100 --timestamps ${req.params.cid}`, { execOptions: { pty: false } });
+      const output = (result.stdout || '') + (result.stderr || '');
+      return res.json({ ok: true, output: output.trim() || 'No logs found.' });
     } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
-  } catch (err: any) { return res.status(500).json({ message: err.message }); }
+  } catch (err: any) { return res.status(500).json({ ok: false, output: `Error: ${err.message}` }); }
 });
 
 /** GET /api/nodes/:id/docker/containers/:cid/inspect */
@@ -2161,12 +2245,15 @@ app.get('/api/nodes/:id/docker/containers/:cid/inspect', verifyToken, async (req
     const node = await loadNodeForDocker(req.params.id);
     const ssh  = await connectSSH(node);
     try {
-      const out = await sshExec(ssh, `docker inspect ${req.params.cid} 2>&1`);
-      let parsed: any = out;
-      try { parsed = JSON.parse(out); } catch {}
+      const result = await ssh.execCommand(`docker inspect ${req.params.cid}`);
+      const raw = (result.stdout || '').trim();
+      if (!raw) return res.json({ ok: false, output: null, error: result.stderr || 'No output from docker inspect' });
+      let parsed: any;
+      try { parsed = JSON.parse(raw); }
+      catch { parsed = raw; } // return as string if parse fails
       return res.json({ ok: true, output: parsed });
     } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
-  } catch (err: any) { return res.status(500).json({ message: err.message }); }
+  } catch (err: any) { return res.status(500).json({ ok: false, output: null, error: err.message }); }
 });
 
 /** GET /api/nodes/:id/docker/containers/:cid/files?path=/ */
@@ -2174,19 +2261,40 @@ app.get('/api/nodes/:id/docker/containers/:cid/files', verifyToken, async (req: 
   try {
     if (!await requireDockerEnabled(req, res)) return;
     assertDockerSafeId(req.params.cid, 'containerId');
-    const browsePath = (req.query.path as string) || '/';
-    // Strictly allow only safe path characters
-    if (!/^[a-zA-Z0-9/_.\-]+$/.test(browsePath)) {
-      return res.status(400).json({ message: 'Invalid path' });
-    }
+    const browsePath = ((req.query.path as string) || '/').replace(/[^a-zA-Z0-9/_.:\-]/g, '');
+    if (!browsePath.startsWith('/')) return res.status(400).json({ message: 'Path must be absolute' });
     const node = await loadNodeForDocker(req.params.id);
     const ssh  = await connectSSH(node);
     try {
-      const out = await sshExec(ssh, `docker exec ${req.params.cid} ls -pla "${browsePath}" 2>&1`);
-      return res.json({ ok: true, path: browsePath, output: out });
+      // -F appends /  to dirs,  @ to symlinks, * to executables — no color codes
+      const result = await ssh.execCommand(`docker exec ${req.params.cid} ls -F --color=never "${browsePath}" 2>&1`);
+      const raw  = result.stdout || result.stderr || '';
+      const entries = raw.split('\n')
+        .map((l: string) => l.trim())
+        .filter((l: string) => l && l !== '.' && l !== '..');
+      return res.json({ ok: true, path: browsePath, entries });
     } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
   } catch (err: any) { return res.status(500).json({ message: err.message }); }
 });
+
+/** GET /api/nodes/:id/docker/containers/:cid/cat?path=/etc/hosts */
+app.get('/api/nodes/:id/docker/containers/:cid/cat', verifyToken, async (req: AuthedRequest, res) => {
+  try {
+    if (!await requireDockerEnabled(req, res)) return;
+    assertDockerSafeId(req.params.cid, 'containerId');
+    const filePath = ((req.query.path as string) || '').replace(/[^a-zA-Z0-9/_.:\-]/g, '');
+    if (!filePath || !filePath.startsWith('/')) return res.status(400).json({ message: 'Invalid or missing path' });
+    const node = await loadNodeForDocker(req.params.id);
+    const ssh  = await connectSSH(node);
+    try {
+      // head -c 524288 = 512 KB limit to prevent huge payloads
+      const result = await ssh.execCommand(`docker exec ${req.params.cid} head -c 524288 "${filePath}" 2>&1`);
+      const content = result.stdout || result.stderr || '(empty)';
+      return res.json({ ok: true, path: filePath, content });
+    } finally { try { if (ssh.isConnected()) ssh.dispose(); } catch {} }
+  } catch (err: any) { return res.status(500).json({ message: err.message }); }
+});
+
 
 // --------------------------------------------------
 // HTTP + WebSocket
@@ -2196,9 +2304,10 @@ const server = http.createServer(app);
 
 // metrics / dashboard socket
 const metricsWss = new WebSocketServer({ noServer: true });
-
 // terminal socket
 const terminalWss = new WebSocketServer({ noServer: true });
+// docker exec socket
+const dockerExecWss = new WebSocketServer({ noServer: true });
 
 const metricClients = new Set<WebSocket>();
 
@@ -2382,24 +2491,126 @@ terminalWss.on('connection', async (ws, req) => {
   conn.connect(commonConfig);
 });
 
+// ── Docker Exec WebSocket ─────────────────────────────────────────────────
+dockerExecWss.on('connection', async (ws, req) => {
+  const url         = new URL(req.url || '', 'http://localhost');
+  const nodeId      = url.searchParams.get('nodeId');
+  const containerId = url.searchParams.get('containerId');
+  const token       = url.searchParams.get('token');
+
+  const abort = (msg: string) => { ws.send(`\r\n[exec] ${msg}\r\n`); ws.close(); };
+
+  if (!nodeId || !containerId || !token) return abort('Missing parameters');
+
+  let userId: string; let userRole: string;
+  try { const p = verifyJwt(token); userId = p.id; userRole = p.role; }
+  catch { return abort('Unauthorized: invalid token'); }
+
+  try { assertDockerSafeId(containerId, 'containerId'); }
+  catch { return abort('Invalid containerId'); }
+
+  // Verify node access
+  if (userRole !== 'admin' && userRole !== 'super_admin') {
+    const { rows } = await pool.query(
+      'SELECT node_id FROM node_assignments WHERE user_id=$1 AND node_id=$2', [userId, nodeId]
+    );
+    if (!rows[0]) return abort('Forbidden: not assigned to this node');
+    // Also check docker_enabled
+    const { rows: dr } = await pool.query('SELECT docker_enabled FROM users WHERE id=$1', [userId]);
+    if (!dr[0]?.docker_enabled) return abort('Docker access not enabled for your account');
+  }
+
+  const { rows: nodeRows } = await pool.query('SELECT * FROM nodes WHERE id=$1', [nodeId]);
+  if (!nodeRows[0]) return abort('Node not found');
+  const nodeRow = nodeRows[0];
+  const credential = (() => { try { return decryptCredential(nodeRow.credential); } catch { return nodeRow.credential; } })();
+
+  const conn = new Client();
+  const cfg: any = {
+    host: nodeRow.ip_address, port: nodeRow.port || 22,
+    username: nodeRow.username, readyTimeout: 20000,
+    hostVerifier: () => true,
+  };
+  if (nodeRow.auth_type === 'privateKey') cfg.privateKey = sanitizePrivateKey(credential);
+  else cfg.password = credential;
+
+  conn.on('ready', () => {
+    // Open a PTY shell — then immediately exec into the container
+    conn.shell(
+      { term: 'xterm-256color', cols: 80, rows: 24 },
+      (err, stream) => {
+        if (err) { abort(`Shell error: ${err.message}`); conn.end(); return; }
+
+        // Try bash first, fall back to sh, then ash (Alpine)
+        // The subshell runs: exec so the container's init process replaces the shell
+        const shellCmd =
+          `docker exec -it ${containerId} /bin/bash 2>/dev/null` +
+          ` || docker exec -it ${containerId} /bin/sh 2>/dev/null` +
+          ` || docker exec -it ${containerId} /bin/ash\n`;
+
+        stream.write(shellCmd);
+
+        stream.on('data', (d: Buffer) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(d.toString('utf8'));
+        });
+        stream.stderr?.on('data', (d: Buffer) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(d.toString('utf8'));
+        });
+        stream.on('close', () => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send('\r\n\x1b[33m[exec] Session closed\x1b[0m\r\n');
+            ws.close();
+          }
+          conn.end();
+        });
+
+        ws.on('message', (msg: any) => {
+          if (stream.writable) {
+            const raw = msg.toString();
+            // Handle resize events from xterm.js
+            if (raw.startsWith('{')) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+                  stream.setWindow(parsed.rows, parsed.cols, 0, 0);
+                  return;
+                }
+              } catch {}
+            }
+            stream.write(raw);
+          }
+        });
+
+        ws.on('close', () => {
+          try { stream.end('exit\n'); } catch {}
+          conn.end();
+        });
+
+        ws.send('\r\n\x1b[32m[exec] SSH connected — launching container shell…\x1b[0m\r\n');
+      }
+    );
+  });
+  conn.on('error', (err) => abort(`SSH error: ${err.message}`));
+  conn.connect(cfg);
+});
+
+
 // Route upgrade requests
 server.on('upgrade', (req, socket, head) => {
   const pathname = req.url ? new URL(req.url, 'http://localhost').pathname : '';
 
   if (pathname === '/ws') {
-    metricsWss.handleUpgrade(req, socket, head, (ws) => {
-      metricsWss.emit('connection', ws, req);
-    });
+    metricsWss.handleUpgrade(req, socket, head, (ws) => { metricsWss.emit('connection', ws, req); });
     return;
   }
-
   if (pathname === '/ws/terminal') {
-  terminalWss.handleUpgrade(req, socket, head, (ws) => {
-    terminalWss.emit('connection', ws, req);
-  });
-  return;
-}
-
+    terminalWss.handleUpgrade(req, socket, head, (ws) => { terminalWss.emit('connection', ws, req); });
+    return;
+  }
+  if (pathname === '/ws/docker-exec') {
+    dockerExecWss.handleUpgrade(req, socket, head, (ws) => { dockerExecWss.emit('connection', ws, req); });
+    return;
+  }
   socket.destroy();
 });
 
@@ -2497,11 +2708,28 @@ setInterval(pollAllNodes, 10000);
 // Serve Frontend (Vite build)
 // --------------------------------------------------
 
-app.use(express.static(path.join(__dirname, "dist")));
+app.use(express.static(path.join(__dirname, 'dist')));
 
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "dist", "index.html"));
+// API 404 — must come before the SPA wildcard so unknown /api/* returns JSON not HTML
+app.use('/api', (_req, res) => {
+
+  res.status(404).json({ message: 'API route not found' });
 });
+
+// Global JSON error handler — prevents Express from returning HTML error pages
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[EXPRESS ERROR]', err?.message || err);
+  res.status(err.status || 500).json({ message: err?.message || 'Internal server error' });
+});
+
+// SPA fallback — only for non-API routes
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
+    return res.status(404).json({ message: 'Not found' });
+  }
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
