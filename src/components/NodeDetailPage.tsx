@@ -61,7 +61,7 @@ interface NodeRecord {
   ipAddress: string;
   port: number;
   region?: string;
-  status: string;
+  status: 'connecting' | 'online' | 'offline' | 'warning' | 'rebooting' | string;
 }
 
 interface ChartPoint { time: string; value: number; }
@@ -137,6 +137,8 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
   const [isActing,    setIsActing]    = useState(false);
   const [actionLabel, setActionLabel] = useState('');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // Local reboot state — provides instant UI feedback before poller catches up
+  const [isRebooting, setIsRebooting] = useState(false);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -171,7 +173,15 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
   };
 
   const handleOpenTerminal  = () => { if (!node) return; onOpenTerminalPage?.(node.id, node.displayName); };
-  const handleSoftReboot    = () => sendNodeAction('reboot',   'Soft Reboot');
+  const handleSoftReboot    = async () => {
+    if (isActing || !node) return;
+    // Immediate local feedback — flip to 'rebooting' state right away
+    setIsRebooting(true);
+    setMetrics(prev => prev ? { ...prev, status: 'offline', uptime: '0 mins' } : prev);
+    await sendNodeAction('reboot', 'Soft Reboot');
+    // If the request failed, revert our optimistic state
+    // (success keeps it as rebooting until poller confirms online)
+  };
   const handleUpdateConfig  = () => showToast('success', 'Config update queued');
 
   // ── Data fetching ─────────────────────────────────────────────────────────
@@ -199,6 +209,10 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
           setNetHist(prev => [...prev.slice(-29), { time: t, inbound: data.netIn ?? 0, outbound: data.netOut ?? 0 }]);
           if (Array.isArray(data.docker))  setDocker(data.docker);
           if (data.dockerStatus)           setDockerStatus(data.dockerStatus);
+          // Clear local rebooting flag once the server confirms online/warning
+          if (data.status === 'online' || data.status === 'warning') {
+            setIsRebooting(false);
+          }
         }
       } catch { /* ignore */ }
     };
@@ -210,7 +224,10 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [metrics?.logs]);
 
-  const effectiveStatus = metrics?.status ?? node?.status ?? 'connecting';
+  const effectiveStatus = isRebooting ? 'rebooting' : (metrics?.status ?? node?.status ?? 'connecting');
+  const displayUptime   = isRebooting && (metrics?.uptime === '0 mins' || !metrics?.uptime || metrics?.uptime === '—')
+    ? '0 mins'
+    : metrics?.uptime || '—';
 
   // Seed fake CPU history until live data arrives
   useEffect(() => {
@@ -256,15 +273,18 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
             <span className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full border ${
               effectiveStatus === 'online'
                 ? 'text-neon-lime bg-neon-lime/10 border-neon-lime/30'
+                : effectiveStatus === 'rebooting'
+                ? 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30'
                 : effectiveStatus === 'warning'
                 ? 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30'
                 : 'text-red-400 bg-red-500/10 border-red-500/30'
             }`}>
               <span className={`w-1.5 h-1.5 rounded-full ${
-                effectiveStatus === 'online'  ? 'bg-neon-lime animate-pulse' :
-                effectiveStatus === 'warning' ? 'bg-yellow-400 animate-pulse' : 'bg-red-500'
+                effectiveStatus === 'online'    ? 'bg-neon-lime animate-pulse' :
+                effectiveStatus === 'rebooting' ? 'bg-yellow-400 animate-ping' :
+                effectiveStatus === 'warning'   ? 'bg-yellow-400 animate-pulse' : 'bg-red-500'
               }`} />
-              Node {effectiveStatus.toUpperCase()}
+              {effectiveStatus === 'rebooting' ? '⟳ Rebooting…' : `Node ${effectiveStatus.toUpperCase()}`}
             </span>
           </div>
 
@@ -275,7 +295,7 @@ export default function NodeDetailPage({ nodeId, onBack, onOpenTerminalPage, rol
         </div>
 
         <div className="flex gap-4">
-          <UptimeClock uptime={metrics?.uptime || '—'} />
+          <UptimeClock uptime={displayUptime} />
           <PingCard    ping={metrics?.ping ?? -1}     />
         </div>
       </div>

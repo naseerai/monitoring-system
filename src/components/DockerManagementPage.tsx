@@ -1,12 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Boxes, Play, Square, RotateCcw, Trash2, RefreshCw, Loader2,
-  AlertTriangle, ChevronDown, Server, Layers, ExternalLink, PackageX,
+  AlertTriangle, ChevronDown, ChevronUp, Server, Layers, ExternalLink, PackageX,
   HardDrive, Network, ScrollText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import ContainerDrawer from './ContainerDrawer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface DC { ID: string; Names: string; Image: string; Status: string; Ports: string; Label?: string; stats?: { CPUPerc: string; MemUsage: string } | null; }
+interface DC {
+  ID: string; Names: string; Image: string; Status: string; Ports: string;
+  Label?: string;
+  projectName?: string;   // com.docker.compose.project (from backend)
+  serviceName?: string;   // com.docker.compose.service (from backend)
+  stats?: { CPUPerc: string; MemUsage: string } | null;
+}
 interface DImg { ID: string; Repository: string; Tag: string; Size: string; CreatedSince: string; }
 interface DVol { Name: string; Driver: string; Mountpoint?: string; }
 interface DNet { ID: string; Name: string; Driver: string; Scope: string; }
@@ -49,8 +55,8 @@ function ActBtn({ icon: I, title: t, color, busy, onClick }: { icon: React.Eleme
   );
 }
 
-// ── Container Row ─────────────────────────────────────────────────────────────
-function CRow({ c, nodeId, tok, onOpen, onRefresh }: { key?: string; c: DC; nodeId: string; tok: string; onOpen: () => void; onRefresh: () => void }) {
+// ── Service Row (inside a Stack Card) ────────────────────────────────────────
+function ServiceRow({ c, nodeId, tok, onOpen, onRefresh }: { c: DC; nodeId: string; tok: string; onOpen: () => void; onRefresh: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const H = { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' };
   const up = c.Status.toLowerCase().startsWith('up');
@@ -68,48 +74,137 @@ function CRow({ c, nodeId, tok, onOpen, onRefresh }: { key?: string; c: DC; node
     setBusy(null);
   };
 
+  // Prefer serviceName from compose label; fall back to container name
+  const displayName = (c.serviceName && c.serviceName !== c.Names)
+    ? c.serviceName
+    : c.Names.replace(/^\//, '');
+
+  // Ports: trim long port strings to 2 entries
+  const portStr = c.Ports && c.Ports !== '-' && c.Ports !== ''
+    ? c.Ports.split(',').slice(0, 2).map(p => p.trim()).join('  ·  ')
+    : null;
+
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors border-b border-[#080808] last:border-0 cursor-pointer group" onClick={onOpen}>
-      <Dot status={c.Status} />
+    <div
+      className="flex items-center gap-3 pl-8 pr-4 py-3 border-b border-[#0f0f0f] last:border-0 hover:bg-[#DFFF00]/[0.02] transition-colors cursor-pointer group"
+      onClick={onOpen}
+    >
+      {/* Green service indicator */}
+      <span className="relative flex items-center justify-center w-3 h-3 flex-shrink-0">
+        {up && <span className="absolute w-3 h-3 rounded-full bg-emerald-400/25 animate-ping" />}
+        <span className={`relative w-2 h-2 rounded-full ${up ? 'bg-emerald-400 shadow-[0_0_5px_#34d399]' : 'bg-red-500/60'}`} />
+      </span>
+
+      {/* Service name + image */}
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-white truncate group-hover:text-[#DFFF00] transition-colors">{c.Names.replace(/^\//, '')}</p>
-        <p className="text-[10px] text-gray-600 font-mono">{c.ID.slice(0, 12)} · {c.Image}</p>
+        <p className="text-xs font-semibold text-white truncate group-hover:text-[#DFFF00] transition-colors">
+          {displayName}
+        </p>
+        <p className="text-[10px] font-mono text-gray-600 truncate">{c.Image}</p>
       </div>
+
+      {/* Port badge (muted) */}
+      {portStr && (
+        <span className="hidden sm:flex items-center gap-1 text-[9px] font-mono text-gray-600 bg-[#111] border border-[#1f1f1f] rounded px-1.5 py-0.5 max-w-[140px] truncate">
+          <Network size={8} className="flex-shrink-0" />
+          {portStr}
+        </span>
+      )}
+
+      {/* Status badge */}
       <Badge status={c.Status} />
-      <div className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-1 ml-1" onClick={e => e.stopPropagation()}>
         {up
-          ? <><ActBtn icon={Square} title="Stop" color="yellow" busy={busy === 'stop'} onClick={() => act('stop')} />
-              <ActBtn icon={RotateCcw} title="Restart" color="cyan" busy={busy === 'restart'} onClick={() => act('restart')} /></>
+          ? <>
+              <ActBtn icon={Square}    title="Stop"    color="yellow" busy={busy === 'stop'}    onClick={() => act('stop')} />
+              <ActBtn icon={RotateCcw} title="Restart" color="cyan"   busy={busy === 'restart'} onClick={() => act('restart')} />
+            </>
           : <ActBtn icon={Play} title="Start" color="green" busy={busy === 'start'} onClick={() => act('start')} />
         }
-        <ActBtn icon={ScrollText} title="Logs" color="purple" busy={false} onClick={() => onOpen()} />
-        <ActBtn icon={Trash2} title="Remove" color="red" busy={busy === 'remove'} onClick={() => { if (window.confirm('Remove?')) act('remove'); }} />
+        <ActBtn icon={ScrollText} title="Logs"   color="purple" busy={false}              onClick={() => onOpen()} />
+        <ActBtn icon={Trash2}     title="Remove" color="red"    busy={busy === 'remove'} onClick={() => { if (window.confirm('Remove container?')) act('remove'); }} />
       </div>
     </div>
   );
 }
 
-// ── Stack Group ───────────────────────────────────────────────────────────────
-function StackGroup({ name, containers, nodeId, tok, onOpen, onRefresh }: {
-  key?: string; name: string; containers: DC[]; nodeId: string; tok: string;
+// ── Stack Container Card ──────────────────────────────────────────────────────
+function StackContainer({ name, containers, nodeId, tok, onOpen, onRefresh }: {
+  name: string; containers: DC[]; nodeId: string; tok: string;
   onOpen: (c: DC) => void; onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(true);
-  const running = containers.filter(c => c.Status.toLowerCase().startsWith('up')).length;
+  const total    = containers.length;
+  const running  = containers.filter(c => c.Status.toLowerCase().startsWith('up')).length;
+  const allUp    = running === total;
+  const hasDown  = running < total;
   const isCompose = name !== 'Standalone';
-  const dotColor = running === containers.length ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : running > 0 ? 'bg-yellow-400' : 'bg-red-500/60';
-  return (
-    <div className="border border-[#1a1a1a] rounded-xl overflow-hidden mb-3 bg-[#0a0a0a]">
-      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.02] transition-colors text-left">
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
-        {isCompose ? <Layers size={13} className="text-pink-400 flex-shrink-0" /> : <Server size={13} className="text-gray-600 flex-shrink-0" />}
-        {/* name is now always human-readable: either a compose project name or 'Standalone' */}
-        <p className="text-sm font-bold text-white flex-1 truncate">{name}</p>
 
-        <span className="text-[10px] text-gray-600 font-mono">{running}/{containers.length}</span>
-        <ChevronDown size={13} className={`text-gray-600 transition-transform ${open ? 'rotate-180' : ''}`} />
+  const borderColor = allUp ? '#DFFF00' : running > 0 ? '#FACC15' : '#EF4444';
+  const countColor  = allUp ? 'text-[#DFFF00]' : running > 0 ? 'text-yellow-400' : 'text-red-400';
+
+  return (
+    <div
+      className="mb-4 rounded-xl overflow-hidden"
+      style={{
+        background: 'linear-gradient(135deg,#0d0d0d,#080808)',
+        border: '1px solid #1c1c1c',
+        borderLeft: `3px solid ${borderColor}`,
+        boxShadow: `0 4px 24px ${borderColor}0d`,
+      }}
+    >
+      {/* ── Stack Header ── */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/[0.02] transition-colors text-left"
+      >
+        {/* Stack icon: yellow for compose, gray for standalone */}
+        {isCompose
+          ? <Layers size={16} className="text-[#DFFF00] flex-shrink-0 drop-shadow-[0_0_4px_#DFFF00]" />
+          : <Server  size={16} className="text-gray-500 flex-shrink-0" />
+        }
+
+        {/* Name block */}
+        <div className="flex-1 min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-600 mb-0.5">STACK</p>
+          <p className="text-sm font-black uppercase tracking-wider text-white truncate">{name}</p>
+        </div>
+
+        {/* Status badges */}
+        {allUp && (
+          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Healthy
+          </span>
+        )}
+        {hasDown && !allUp && (
+          <span className="flex items-center gap-1 text-[10px] font-bold text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-2.5 py-0.5">
+            <AlertTriangle size={9} /> Degraded
+          </span>
+        )}
+        {running === 0 && (
+          <span className="flex items-center gap-1 text-[10px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 rounded-full px-2.5 py-0.5">
+            Down
+          </span>
+        )}
+
+        <span className={`text-xs font-bold font-mono ${countColor} ml-2`}>{running}/{total}</span>
+        {open
+          ? <ChevronUp   size={13} className="text-gray-600 flex-shrink-0 ml-1" />
+          : <ChevronDown size={13} className="text-gray-600 flex-shrink-0 ml-1" />
+        }
       </button>
-      {open && <div>{containers.map(c => <CRow key={c.ID} c={c} nodeId={nodeId} tok={tok} onOpen={() => onOpen(c)} onRefresh={onRefresh} />)}</div>}
+
+      {/* ── Services List ── */}
+      {open && (
+        <div className="border-t border-[#111]">
+          {containers.map(c => (
+            <ServiceRow key={c.ID} c={c} nodeId={nodeId} tok={tok} onOpen={() => onOpen(c)} onRefresh={onRefresh} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -194,13 +289,16 @@ export default function DockerManagementPage() {
 
   const groups = React.useMemo((): Record<string, DC[]> => {
     if (!data) return { Standalone: [] };
-    // Pre-initialize Standalone bucket — always present
     const g: Record<string, DC[]> = { Standalone: [] };
     for (const c of data.containers) {
-      // Backend sets Label='Standalone' for non-compose containers, or a project name
-      const key = c.Label && c.Label.trim() && c.Label !== 'Standalone'
-        ? c.Label.trim()
-        : 'Standalone';
+      // Priority: use the explicit projectName field from backend (from compose label)
+      // Fall back to the legacy Label field, then 'Standalone'
+      const key =
+        (c.projectName && c.projectName !== 'Standalone')
+          ? c.projectName
+          : (c.Label && c.Label !== 'Standalone' && c.Label.trim())
+            ? c.Label.trim()
+            : 'Standalone';
       if (!g[key]) g[key] = [];
       g[key].push(c);
     }
@@ -312,12 +410,13 @@ export default function DockerManagementPage() {
                     {/* Compose stacks first (all groups except Standalone) */}
                     {(Object.entries(groups) as [string, DC[]][])
                       .filter(([k, cs]) => k !== 'Standalone' && cs.length > 0)
+                      .sort(([a], [b]) => a.localeCompare(b))
                       .map(([name, cs]) => (
-                        <StackGroup key={name} name={name} containers={cs} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
+                        <StackContainer key={name} name={name} containers={cs} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
                       ))}
                     {/* Standalone — only shown if there are containers in it */}
                     {groups['Standalone'] && groups['Standalone'].length > 0 && (
-                      <StackGroup name="Standalone" containers={groups['Standalone']} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
+                      <StackContainer name="Standalone" containers={groups['Standalone']} nodeId={selNode} tok={tok} onOpen={setDrawer} onRefresh={fetchDocker} />
                     )}
                   </>
                 )}

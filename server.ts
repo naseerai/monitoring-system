@@ -172,31 +172,38 @@ function calcNetThroughput(
 }
 
 export interface DockerContainer {
-  id:     string;
-  name:   string;
-  image:  string;
-  status: string;
-  ports:  string;
-  cpu:    string;
-  mem:    string;
+  id:          string;
+  name:        string;
+  image:       string;
+  status:      string;
+  ports:       string;
+  cpu:         string;
+  mem:         string;
+  projectName: string;  // com.docker.compose.project label, or 'Standalone'
+  serviceName: string;  // com.docker.compose.service label, or container name
 }
 
 /**
- * Parse `docker ps --all --format "{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"`
+ * Parse `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Label "com.docker.compose.project"}}||{{.Label "com.docker.compose.service"}}||{{.Ports}}'`
  * Returns a map keyed by short container ID (12 chars).
+ * Falls back gracefully when extra fields are missing.
  */
 function parseDockerPsPipe(raw: string): Map<string, DockerContainer> {
   const map = new Map<string, DockerContainer>();
   for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
-    const parts = line.split('|');
+    // Support both '||' (preferred) and '|' (legacy) delimiters
+    const sep   = line.includes('||') ? '||' : '|';
+    const parts = line.split(sep);
     if (parts.length < 4) continue;
-    const id     = (parts[0] ?? '').trim().slice(0, 12);
-    const name   = (parts[1] ?? '').trim() || '-';
-    const image  = (parts[2] ?? '').trim() || '-';
-    const status = (parts[3] ?? '').trim() || '-';
-    const ports  = (parts[4] ?? '').trim() || '-';
+    const id          = (parts[0] ?? '').trim().slice(0, 12);
+    const name        = (parts[1] ?? '').trim() || '-';
+    const image       = (parts[2] ?? '').trim() || '-';
+    const status      = (parts[3] ?? '').trim() || '-';
+    const projectName = (parts[4] ?? '').trim() || 'Standalone';
+    const serviceName = (parts[5] ?? '').trim() || name;
+    const ports       = (parts[6] ?? parts[4] ?? '').trim() || '-';  // legacy: ports at index 4
     if (!id) continue;
-    map.set(id, { id, name, image, status, ports, cpu: '-', mem: '-' });
+    map.set(id, { id, name, image, status, ports, cpu: '-', mem: '-', projectName, serviceName });
   }
   return map;
 }
@@ -303,7 +310,7 @@ function runSSHCommand(node: any, command: string): Promise<string> {
   });
 }
 
-type NodeStatus = 'connecting' | 'online' | 'offline' | 'warning';
+type NodeStatus = 'connecting' | 'online' | 'offline' | 'warning' | 'rebooting';
 
 interface NodeRecord {
   id: string;
@@ -508,14 +515,17 @@ function parseLogs(text: string): LogLine[] {
 // SSH helpers
 // --------------------------------------------------
 
-async function connectSSH(node: Pick<NodeRecord, 'ipAddress' | 'port' | 'username' | 'authType' | 'credential'>) {
+async function connectSSH(
+  node: Pick<NodeRecord, 'ipAddress' | 'port' | 'username' | 'authType' | 'credential'>,
+  overrides: { readyTimeout?: number } = {}
+) {
   const ssh = new NodeSSH();
 
   const baseConfig: any = {
     host: node.ipAddress,
     port: node.port || 22,
     username: node.username,
-    readyTimeout: 30000,
+    readyTimeout: overrides.readyTimeout ?? 30000,
     tryKeyboard: true,
     keepaliveInterval: 10000,
     keepaliveCountMax: 5,
@@ -565,6 +575,13 @@ async function testSSH(node: Pick<NodeRecord, 'ipAddress' | 'port' | 'username' 
 // Track per-node fail counts for the 3-attempt offline promotion
 const pollFailCount = new Map<string, number>();
 
+/**
+ * Tracks nodes that recently received a reboot command.
+ * Value is the timestamp (ms) when the reboot was issued.
+ * Used by the poller to bypass the 3-fail rule and use a shorter SSH timeout.
+ */
+const rebootingNodes = new Map<string, number>();
+
 async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let ssh: NodeSSH | null = null;
 
@@ -574,10 +591,14 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
   let netIn:     number = 0;
   let netOut:    number = 0;
 
+  // Use a 2-second SSH timeout for nodes currently rebooting
+  const isRebooting = rebootingNodes.has(node.id);
+  const sshOverrides = isRebooting ? { readyTimeout: 2000 } : {};
+
   try {
     // ── Per-node SSH connect: isolated so one node failure doesn't crash others ──
     try {
-      ssh = await connectSSH(node);
+      ssh = await connectSSH(node, sshOverrides);
     } catch (connectErr: any) {
       const message = classifySSHError(connectErr);
       console.warn(`[POLL] SSH connect failed for ${node.displayName} (${node.ipAddress}): ${message}`);
@@ -626,13 +647,14 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
     const netAfterRaw = await sshExec(ssh, `cat /proc/net/dev 2>/dev/null || echo ''`);
     const elapsedMs   = Date.now() - t0;
 
-    // ── Phase 3: docker ps + docker stats (pipe-delimited) ───────────────
+    // ── Phase 3: docker ps + docker stats (pipe-delimited, with compose labels) ──
     let dockerContainers: DockerContainer[] = [];
     let dockerStatus = 'Not Available';
     try {
+      // Use || delimiter; fields: ID||Names||Image||Status||project||service||Ports
       const dockerPsRaw = await sshExec(
         ssh,
-        `docker ps --all --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`
+        `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Label "com.docker.compose.project"}}||{{.Label "com.docker.compose.service"}}||{{.Ports}}' 2>/dev/null || echo 'DOCKER_NOT_FOUND'`
       ).catch(() => 'DOCKER_NOT_FOUND');
 
       if (!dockerPsRaw.includes('DOCKER_NOT_FOUND') && !dockerPsRaw.includes('command not found') && !dockerPsRaw.includes('not found')) {
@@ -642,7 +664,7 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
         if (psMap.size > 0) {
           const statsRaw = await sshExec(
             ssh,
-            `docker stats --no-stream --format '{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}' 2>/dev/null || echo ''`
+            `docker stats --no-stream --format '{{.ID}}||{{.CPUPerc}}||{{.MemUsage}}' 2>/dev/null || echo ''`
           ).catch(() => '');
           dockerContainers = mergeDockerStats(statsRaw, psMap);
         } else {
@@ -672,6 +694,11 @@ async function collectMetrics(node: NodeRecord): Promise<NodeMetrics> {
 
     const status: 'online' | 'warning' = (cpu > 85 || ramPercent > 90) ? 'warning' : 'online';
 
+    // SSH succeeded — if this node was rebooting, it's now back online; clear the flag
+    if (isRebooting) {
+      rebootingNodes.delete(node.id);
+      console.log(`[POLL] Node ${node.displayName} (${node.ipAddress}) is back ONLINE after reboot.`);
+    }
     pollFailCount.set(node.id, 0);
 
     return {
@@ -1030,6 +1057,18 @@ app.post('/api/nodes/:id/reboot', verifyToken, requireRole('admin', 'employee'),
     };
 
     await runSSHCommand(node, 'nohup sudo reboot >/dev/null 2>&1 &');
+
+    // ── Immediately mark node as 'rebooting' in DB and track in memory ──
+    const now = nowIso();
+    rebootingNodes.set(id, Date.now());
+    // Reset fail count so the poller doesn't carry stale state
+    pollFailCount.set(id, 0);
+    void pool.query(
+      'UPDATE nodes SET status=$1,updated_at=$2,error=NULL,uptime_output=$3 WHERE id=$4',
+      ['rebooting', now, '0 mins', id]
+    );
+    console.log(`[REBOOT] ${node.displayName} (${node.ipAddress}) → status set to 'rebooting'`);
+
     return res.json({ success: true, message: 'Reboot command sent' });
   } catch (err: any) {
     console.error('Reboot failed:', err);
@@ -2010,8 +2049,9 @@ app.get('/api/nodes/:id/docker-full', verifyToken, async (req: AuthedRequest, re
       }).filter(Boolean) as JsonLine[];
     };
 
-    // Parse pipe-delimited lines. Fields: ID||Names||Image||Status||Label||Ports
-    // '||' never appears in docker field values (names, ports, image names)
+    // Parse pipe-delimited lines.
+    // Fields: ID||Names||Image||Status||compose.project||compose.service||Ports
+    // '||' never appears in docker field values.
     const parsePsLines = (raw: string): JsonLine[] => {
       if (!raw) return [];
       const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
@@ -2026,56 +2066,72 @@ app.get('/api/nodes/:id/docker-full', verifyToken, async (req: AuthedRequest, re
           console.log(`[DOCKER DEBUG] Skipping short line (${parts.length} parts):`, JSON.stringify(line.slice(0, 120)));
           continue;
         }
-        const [rawID = '', rawNames = '', rawImage = '', rawStatus = '', rawLabel = '', rawPorts = ''] = parts;
+        const [rawID = '', rawNames = '', rawImage = '', rawStatus = '', rawProject = '', rawService = '', rawPorts = ''] = parts;
         const ID = rawID.trim();
         if (!ID) continue;
+        const projectName = rawProject.trim() || 'Standalone';
+        const containerName = rawNames.trim();
         results.push({
           ID,
-          Names:  rawNames.trim(),
-          Image:  rawImage.trim(),
-          Status: rawStatus.trim(),
-          // Explicitly 'Standalone' when label is absent — never undefined
-          Label:  rawLabel.trim() || 'Standalone',
-          Ports:  rawPorts.trim(),
+          Names:       containerName,
+          Image:       rawImage.trim(),
+          Status:      rawStatus.trim(),
+          // Legacy Label field kept for backward compat with StackGroup grouping
+          Label:       projectName,
+          // New explicit fields used by StackContainer component
+          projectName,
+          serviceName: rawService.trim() || containerName,
+          Ports:       rawPorts.trim(),
         });
       }
       return results;
     };
 
-    // Run docker ps with the safest possible quoting.
-    // We use printf to assign the format string to a variable so the shell never
-    // mangles the Go template double-quotes inside {{index .Labels "..."}}.
+    // Run docker ps with full compose label extraction.
+    // Format: ID||Names||Image||Status||compose.project||compose.service||Ports
     const runDockerPs = async (): Promise<string> => {
-      // FMT is assigned via printf so the remote shell treats it as a literal string
-      const cmd = [
-        `FMT=$(printf '%s' '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}`,
-        // We split label access across concat to avoid any JS/shell interference
-        `||{{index .Labels "com.docker.compose.project"}}||{{.Ports}}')`,
-        `&& docker ps -a --format "$FMT"`,
-      ].join(' ');
+      // Primary: direct format string with Label template function
+      const primaryCmd = `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Label "com.docker.compose.project"}}||{{.Label "com.docker.compose.service"}}||{{.Ports}}' 2>/dev/null`;
 
-      let r = await ssh.execCommand(cmd);
+      let r = await ssh.execCommand(primaryCmd);
       let out = (r.stdout || '').trim();
 
       console.log(`[DOCKER DEBUG] docker ps stdout len=${out.length} stderr=${JSON.stringify((r.stderr || '').slice(0, 300))}`);
 
-      // If still empty, maybe the label accessor isn't supported — fall back to simpler format
+      // Fallback 1: index .Labels map accessor (older Docker/Go template engines)
       if (!out) {
-        const simpleCmd = `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Ports}}'`;
-        const r2 = await ssh.execCommand(simpleCmd);
+        const cmd2 = [
+          `FMT=$(printf '%s' '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}`,
+          `||{{index .Labels "com.docker.compose.project"}}||{{index .Labels "com.docker.compose.service"}}||{{.Ports}}')`,
+          `&& docker ps -a --format "$FMT"`,
+        ].join(' ');
+        const r2 = await ssh.execCommand(cmd2);
         out = (r2.stdout || '').trim();
-        console.log(`[DOCKER DEBUG] Simple fallback stdout len=${out.length} stderr=${JSON.stringify((r2.stderr || '').slice(0, 200))}`);
-        // Inject empty label field so parser still gets 5 fields
-        if (out) out = out.split('\n').map(l => `${l}||`).join('\n');
+        console.log(`[DOCKER DEBUG] Label-index fallback stdout len=${out.length}`);
       }
 
-      // Sudo fallback if docker daemon permission denied
+      // Fallback 2: no labels — inject two empty fields so parser still gets correct column count
+      if (!out) {
+        const simpleCmd = `docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Ports}}'`;
+        const r3 = await ssh.execCommand(simpleCmd);
+        out = (r3.stdout || '').trim();
+        console.log(`[DOCKER DEBUG] Simple fallback stdout len=${out.length} stderr=${JSON.stringify((r3.stderr || '').slice(0, 200))}`);
+        // Inject two empty label fields so parser sees 7 columns (project=empty, service=empty, ports)
+        if (out) out = out.split('\n').map(l => {
+          const parts = l.split('||');
+          // Insert empty project and service before the last field (Ports)
+          if (parts.length === 5) return `${parts.slice(0,4).join('||')}||||${parts[4]}`;
+          return `${l}||||`;
+        }).join('\n');
+      }
+
+      // Fallback 3: sudo if permission denied
       if (!out && r.stderr) {
         const e = r.stderr.toLowerCase();
         if (e.includes('permission denied') || e.includes('cannot connect') || e.includes('docker.sock')) {
           console.log('[DOCKER] Retrying with sudo...');
-          const r3 = await ssh.execCommand(`sudo docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||||{{.Ports}}'`);
-          out = (r3.stdout || '').trim();
+          const r4 = await ssh.execCommand(`sudo docker ps -a --format '{{.ID}}||{{.Names}}||{{.Image}}||{{.Status}}||{{.Label "com.docker.compose.project"}}||{{.Label "com.docker.compose.service"}}||{{.Ports}}'`);
+          out = (r4.stdout || '').trim();
           console.log(`[DOCKER DEBUG] sudo stdout len=${out.length}`);
         }
       }
@@ -2625,27 +2681,50 @@ async function pollNode(node: NodeRecord) {
   if (pollingMap.get(node.id)) return;
   pollingMap.set(node.id, true);
 
+  const isRebooting = rebootingNodes.has(node.id);
+
   try {
     const metrics = await collectMetrics(node);
     broadcastMetrics(metrics);
 
-    // --- Update Supabase (primary store) ---
+    // --- Update PostgreSQL (primary store) ---
     if (metrics.status === 'offline') {
-      const fails = (pollFailCount.get(node.id) ?? 0) + 1;
-      pollFailCount.set(node.id, fails);
-
-      if (fails >= 3) {
+      if (isRebooting) {
+        // Bypass 3-fail rule: mark offline immediately after a reboot command
+        console.log(`[POLL] ${node.displayName} marked OFFLINE immediately (reboot in progress).`);
         void pool.query(
-        'UPDATE nodes SET status=$1,updated_at=$2,error=$3 WHERE id=$4',
-        ['offline', metrics.timestamp, metrics.logs[0]?.message ?? null, node.id]
-      );
+          'UPDATE nodes SET status=$1,updated_at=$2,error=$3 WHERE id=$4',
+          ['offline', metrics.timestamp, metrics.logs[0]?.message ?? null, node.id]
+        );
+      } else {
+        const fails = (pollFailCount.get(node.id) ?? 0) + 1;
+        pollFailCount.set(node.id, fails);
+
+        if (fails >= 3) {
+          void pool.query(
+            'UPDATE nodes SET status=$1,updated_at=$2,error=$3 WHERE id=$4',
+            ['offline', metrics.timestamp, metrics.logs[0]?.message ?? null, node.id]
+          );
+        }
       }
     } else {
-      pollFailCount.set(node.id, 0);
-      void pool.query(
-        'UPDATE nodes SET status=$1,updated_at=$2,error=NULL WHERE id=$3',
-        [metrics.status, metrics.timestamp, node.id]
-      );
+      // SSH succeeded — node is back online
+      if (isRebooting) {
+        // Clear rebooting flag and reset uptime in DB so UI shows it restarted
+        rebootingNodes.delete(node.id);
+        pollFailCount.set(node.id, 0);
+        void pool.query(
+          'UPDATE nodes SET status=$1,updated_at=$2,error=NULL,uptime_output=$3 WHERE id=$4',
+          [metrics.status, metrics.timestamp, metrics.uptime, node.id]
+        );
+        console.log(`[POLL] ${node.displayName} is back ONLINE after reboot. Uptime reset.`);
+      } else {
+        pollFailCount.set(node.id, 0);
+        void pool.query(
+          'UPDATE nodes SET status=$1,updated_at=$2,error=NULL WHERE id=$3',
+          [metrics.status, metrics.timestamp, node.id]
+        );
+      }
     }
 
     console.log(

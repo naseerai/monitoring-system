@@ -24,7 +24,7 @@ interface NodeRecord {
   port: number;
   region?: string;
   authType?: 'password' | 'privateKey';
-  status: 'connecting' | 'online' | 'offline' | 'warning';
+  status: 'connecting' | 'online' | 'offline' | 'warning' | 'rebooting';
   uptimeOutput?: string;
   error?: string;
 }
@@ -34,7 +34,7 @@ interface NodeMetrics {
   cpu: number;
   ramPercent: number;
   ping: number;
-  status: 'online' | 'offline' | 'warning';
+  status: 'online' | 'offline' | 'warning' | 'rebooting';
 }
 
 interface Props {
@@ -61,6 +61,14 @@ function StatusBadge({ status }: { status: NodeRecord['status'] }) {
       <span className="flex items-center gap-1.5 rounded-full border border-yellow-400/30 bg-yellow-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-yellow-400">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400" />
         Warning
+      </span>
+    );
+
+  if (status === 'rebooting')
+    return (
+      <span className="flex items-center gap-1.5 rounded-full border border-yellow-400/40 bg-yellow-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-yellow-300">
+        <span className="h-1.5 w-1.5 animate-ping rounded-full bg-yellow-400" />
+        Rebooting
       </span>
     );
 
